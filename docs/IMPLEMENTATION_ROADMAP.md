@@ -32,8 +32,8 @@ Verified evidence:
 Status: partial. Public Gate futures REST screening, stale-data detection and explicit recovery are
 implemented. A separate public Gate WebSocket capture command now provides subscriptions,
 normalization, bounded backpressure, REST snapshot/sequence synchronization, reconnects, atomic
-manifests and deterministic hash-chain verification. Full local depth reconstruction and a
-long-running capture acceptance run remain pending.
+manifests, deterministic hash-chain verification and deterministic final local-book reconstruction.
+A long-running capture acceptance run and strategy-event integration remain pending.
 
 - Gate.io public market data;
 - 5–10 candidate perpetual pairs;

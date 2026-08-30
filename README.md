@@ -106,7 +106,7 @@ local 15-minute watchdog, and then opens `http://127.0.0.1:8767/` in the default
 
 `capture_market_data.bat` runs an isolated public-data research capture for the requested number of
 seconds (one hour by default) under `data/gate-captures`. It does not feed the paper trader. Verify a
-completed dataset with:
+completed dataset and reproduce its final local-book digest with:
 
 ```bat
 .venv\Scripts\python.exe -m autotrade replay-verify --dataset data\gate-captures\DATASET_ID

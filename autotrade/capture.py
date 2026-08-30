@@ -21,6 +21,7 @@ from autotrade.market_data import (
     GATE_FUTURES_WS_URL,
     GATE_SIZE_DECIMAL_HEADER,
     MAX_GATE_WS_MESSAGE_BYTES,
+    GateLocalOrderBook,
     GateMarketDataError,
     build_gate_ws_subscriptions,
     normalize_gate_ws_message,
@@ -526,14 +527,76 @@ def iter_replay_events(dataset: Path) -> Iterator[dict[str, object]]:
 
 
 def verify_dataset(dataset: Path) -> dict[str, object]:
-    events = list(iter_replay_events(dataset))
+    event_count = sum(1 for _ in iter_replay_events(dataset))
     manifest = _read_manifest(dataset)
-    return {
+    result: dict[str, object] = {
         "dataset_id": manifest["dataset_id"],
-        "event_count": len(events),
+        "event_count": event_count,
         "integrity_status": manifest["integrity_status"],
         "final_event_hash": manifest["final_event_hash"],
     }
+    books = replay_order_books(dataset)
+    if books:
+        records = [books[symbol].metrics().replay_record() for symbol in sorted(books)]
+        result["synchronized_books"] = len(records)
+        result["book_digest"] = hashlib.sha256(_canonical_json(records).encode()).hexdigest()
+    return result
+
+
+def replay_order_books(dataset: Path) -> dict[str, GateLocalOrderBook]:
+    """Rebuild final valid books from an integrity-verified capture session."""
+
+    books: dict[str, GateLocalOrderBook] = {}
+    pending: dict[str, deque[dict[str, object]]] = {}
+    saw_snapshot = False
+    for event in iter_replay_events(dataset):
+        channel = event.get("channel")
+        payload = event.get("payload")
+        if channel == "futures.order_book_snapshot":
+            saw_snapshot = True
+            symbol = str(event.get("symbol", ""))
+            book = books.setdefault(symbol, GateLocalOrderBook(symbol))
+            book.apply_snapshot(payload)
+            buffered = pending.pop(symbol, deque())
+            while buffered:
+                record = buffered.popleft()
+                outcome = book.apply_delta(record)
+                if outcome == "GAP":
+                    retry = deque((record,), maxlen=10_000)
+                    retry.extend(buffered)
+                    pending[symbol] = retry
+                    break
+            continue
+        if channel != "futures.order_book_update" or event.get("event") != "update":
+            continue
+        received_ns = int(str(event.get("received_ts_ns")))
+        received_utc = datetime.fromtimestamp(received_ns / 1_000_000_000, UTC)
+        try:
+            records = normalize_gate_ws_message(
+                _canonical_json(payload), local_receive_utc=received_utc
+            )
+        except GateMarketDataError as exc:
+            raise DatasetError(str(exc)) from exc
+        if len(records) != 1 or records[0].get("type") != "order_book_delta":
+            raise DatasetError("replay order-book event did not normalize to one delta")
+        record = records[0]
+        symbol = str(record.get("contract", ""))
+        book = books.setdefault(symbol, GateLocalOrderBook(symbol))
+        if not book.synchronized:
+            queue = pending.setdefault(symbol, deque(maxlen=10_000))
+            if len(queue) == queue.maxlen:
+                raise DatasetError("replay order-book synchronization buffer exhausted")
+            queue.append(record)
+            continue
+        outcome = book.apply_delta(record)
+        if outcome == "GAP":
+            pending[symbol] = deque((record,), maxlen=10_000)
+
+    synchronized = {symbol: book for symbol, book in books.items() if book.synchronized}
+    if saw_snapshot and pending:
+        missing = ", ".join(sorted(pending))
+        raise DatasetError(f"replay ended with unsynchronized order books: {missing}")
+    return synchronized
 
 
 def capture_dataset(

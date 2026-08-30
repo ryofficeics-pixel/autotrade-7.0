@@ -9,6 +9,7 @@ from pathlib import Path
 from autotrade.market_data import (
     GATE_FUTURES_WS_URL,
     GATE_SIZE_DECIMAL_HEADER,
+    GateLocalOrderBook,
     GateMarketDataError,
     GateOrderBookSequence,
     append_gate_ws_records,
@@ -19,6 +20,67 @@ from autotrade.market_data import (
 
 
 class GateMarketDataTests(unittest.TestCase):
+    def test_local_book_reconstructs_overlap_and_derived_metrics(self) -> None:
+        book = GateLocalOrderBook("ETH_USDT")
+        book.apply_snapshot(
+            {
+                "id": 100,
+                "bids": [{"p": "100", "s": "2"}, {"p": "99", "s": "3"}],
+                "asks": [{"p": "101", "s": "1"}, {"p": "102", "s": "4"}],
+            }
+        )
+        record = {
+            "type": "order_book_delta",
+            "contract": "ETH_USDT",
+            "first_update_id": 100,
+            "last_update_id": 101,
+            "raw": {
+                "b": [{"p": "100", "s": "1"}, {"p": "98", "s": "2"}],
+                "a": [{"p": "101", "s": "2"}],
+            },
+        }
+        self.assertEqual(book.apply_delta(record), "APPLIED")
+        metrics = book.metrics()
+        self.assertEqual(metrics.update_id, 101)
+        self.assertEqual(str(metrics.best_bid), "100")
+        self.assertEqual(str(metrics.best_ask), "101")
+        self.assertEqual(str(metrics.bid_depth), "6")
+        self.assertEqual(str(metrics.ask_depth), "6")
+        self.assertEqual(str(metrics.imbalance), "0")
+        self.assertEqual(book.apply_delta(record), "DUPLICATE")
+
+    def test_local_book_rejects_cross_and_invalidates_on_gap(self) -> None:
+        book = GateLocalOrderBook("ETH_USDT")
+        book.apply_snapshot(
+            {
+                "id": 10,
+                "bids": [{"p": "100", "s": "1"}],
+                "asks": [{"p": "101", "s": "1"}],
+            }
+        )
+        with self.assertRaisesRegex(GateMarketDataError, "crossed"):
+            book.apply_delta(
+                {
+                    "type": "order_book_delta",
+                    "contract": "ETH_USDT",
+                    "first_update_id": 11,
+                    "last_update_id": 11,
+                    "raw": {"b": [{"p": "102", "s": "1"}], "a": []},
+                }
+            )
+        self.assertEqual(
+            book.apply_delta(
+                {
+                    "type": "order_book_delta",
+                    "contract": "ETH_USDT",
+                    "first_update_id": 12,
+                    "last_update_id": 12,
+                    "raw": {"b": [], "a": []},
+                }
+            ),
+            "GAP",
+        )
+        self.assertFalse(book.synchronized)
     def test_subscription_payloads_use_public_decimal_gate_channels(self) -> None:
         requests = build_gate_ws_subscriptions(("btc_usdt", "ETH_USDT"), unix_time=123456)
 

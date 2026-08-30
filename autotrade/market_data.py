@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import time
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -323,6 +324,164 @@ class GateOrderBookSequence:
             self._last_update_id.pop(contract, None)
             return "GAP"
         return "OK"
+
+
+@dataclass(frozen=True)
+class GateBookMetrics:
+    contract: str
+    update_id: int
+    best_bid: Decimal
+    best_ask: Decimal
+    spread_bps: Decimal
+    bid_depth: Decimal
+    ask_depth: Decimal
+    imbalance: Decimal
+    microprice: Decimal
+
+    def replay_record(self) -> dict[str, object]:
+        return {
+            "contract": self.contract,
+            "update_id": self.update_id,
+            "best_bid": str(self.best_bid),
+            "best_ask": str(self.best_ask),
+            "spread_bps": str(self.spread_bps),
+            "bid_depth": str(self.bid_depth),
+            "ask_depth": str(self.ask_depth),
+            "imbalance": str(self.imbalance),
+            "microprice": str(self.microprice),
+        }
+
+
+class GateLocalOrderBook:
+    """Deterministic Gate snapshot/delta reconstruction for capture replay."""
+
+    def __init__(self, contract: str) -> None:
+        self.contract = _contract(contract)
+        self.update_id: int | None = None
+        self._bids: dict[Decimal, Decimal] = {}
+        self._asks: dict[Decimal, Decimal] = {}
+
+    @property
+    def synchronized(self) -> bool:
+        return self.update_id is not None
+
+    def clear(self) -> None:
+        self.update_id = None
+        self._bids.clear()
+        self._asks.clear()
+
+    def apply_snapshot(self, snapshot: object) -> None:
+        if not isinstance(snapshot, dict):
+            raise GateMarketDataError("order-book snapshot must be an object")
+        update_id = _integer(snapshot.get("id"), "snapshot.id")
+        if update_id <= 0:
+            raise GateMarketDataError("snapshot.id must be positive")
+        bids = _level_map(snapshot.get("bids"), "snapshot.bids")
+        asks = _level_map(snapshot.get("asks"), "snapshot.asks")
+        self._validate(bids, asks)
+        self._bids = bids
+        self._asks = asks
+        self.update_id = update_id
+
+    def apply_delta(self, record: dict[str, object]) -> str:
+        if record.get("type") != "order_book_delta":
+            return "IGNORED"
+        if _contract(record.get("contract")) != self.contract:
+            raise GateMarketDataError("order-book delta contract does not match local book")
+        first_id = _integer(record.get("first_update_id"), "first_update_id")
+        last_id = _integer(record.get("last_update_id"), "last_update_id")
+        if last_id < first_id:
+            raise GateMarketDataError("last_update_id must not be below first_update_id")
+        if self.update_id is None:
+            return "UNSYNCHRONIZED"
+        expected = self.update_id + 1
+        if last_id < expected:
+            return "DUPLICATE"
+        if not first_id <= expected <= last_id:
+            self.clear()
+            return "GAP"
+
+        raw = record.get("raw")
+        if not isinstance(raw, dict):
+            raise GateMarketDataError("order-book delta raw payload is missing")
+        bids = dict(self._bids)
+        asks = dict(self._asks)
+        _apply_level_updates(bids, raw.get("b"), "order_book_update.b")
+        _apply_level_updates(asks, raw.get("a"), "order_book_update.a")
+        self._validate(bids, asks)
+        self._bids = bids
+        self._asks = asks
+        self.update_id = last_id
+        return "APPLIED"
+
+    def metrics(self, depth: int = 20) -> GateBookMetrics:
+        if self.update_id is None:
+            raise GateMarketDataError("order book is not synchronized")
+        if depth <= 0:
+            raise GateMarketDataError("depth must be positive")
+        bids = sorted(self._bids.items(), reverse=True)[:depth]
+        asks = sorted(self._asks.items())[:depth]
+        self._validate(dict(bids), dict(asks))
+        best_bid, best_bid_size = bids[0]
+        best_ask, best_ask_size = asks[0]
+        mid = (best_bid + best_ask) / 2
+        bid_depth = sum((size for _, size in bids), Decimal(0))
+        ask_depth = sum((size for _, size in asks), Decimal(0))
+        total_depth = bid_depth + ask_depth
+        top_size = best_bid_size + best_ask_size
+        return GateBookMetrics(
+            contract=self.contract,
+            update_id=self.update_id,
+            best_bid=best_bid,
+            best_ask=best_ask,
+            spread_bps=(best_ask - best_bid) / mid * Decimal(10_000),
+            bid_depth=bid_depth,
+            ask_depth=ask_depth,
+            imbalance=(bid_depth - ask_depth) / total_depth,
+            microprice=(best_ask * best_bid_size + best_bid * best_ask_size) / top_size,
+        )
+
+    @staticmethod
+    def _validate(
+        bids: dict[Decimal, Decimal],
+        asks: dict[Decimal, Decimal],
+    ) -> None:
+        if not bids or not asks:
+            raise GateMarketDataError("order book must contain bids and asks")
+        if max(bids) >= min(asks):
+            raise GateMarketDataError("order book is crossed or locked")
+
+
+def _level_map(value: object, name: str) -> dict[Decimal, Decimal]:
+    if not isinstance(value, list):
+        raise GateMarketDataError(f"{name} must be a list")
+    levels: dict[Decimal, Decimal] = {}
+    for index, item in enumerate(value):
+        if not isinstance(item, dict):
+            raise GateMarketDataError(f"{name}[{index}] must be an object")
+        price = _positive_decimal(item.get("p"), f"{name}[{index}].p")
+        size = _non_negative_decimal(item.get("s"), f"{name}[{index}].s")
+        if size:
+            levels[price] = size
+    return levels
+
+
+def _apply_level_updates(
+    side: dict[Decimal, Decimal],
+    value: object,
+    name: str,
+) -> None:
+    if not isinstance(value, list):
+        raise GateMarketDataError(f"{name} must be a list")
+    for index, item in enumerate(value):
+        if not isinstance(item, dict):
+            raise GateMarketDataError(f"{name}[{index}] must be an object")
+        price = _positive_decimal(item.get("p"), f"{name}[{index}].p")
+        size = _non_negative_decimal(item.get("s"), f"{name}[{index}].s")
+        if size:
+            side[price] = size
+        else:
+            side.pop(price, None)
 
 
 def append_gate_ws_records(path: Path, records: list[dict[str, object]]) -> int:

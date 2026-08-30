@@ -75,7 +75,9 @@ best bid/ask, L2 updates and ticker messages, reconciles each symbol against a R
 and writes a hash-chained event stream plus an atomic manifest. Capture is isolated from trading and
 cannot influence entries, risk, sizing or execution. A dataset is accepted as `COMPLETE` only after
 one uninterrupted connection, zero sequence gaps, zero drops and a synchronized book sequence for
-every requested symbol. Full local depth reconstruction and long-duration acceptance remain pending.
+every requested symbol. Replay deterministically reconstructs absolute-size depth, deletes zero-size
+levels, rejects crossed/empty books and reports a digest over final spread, depth, imbalance and
+microprice metrics. Long-duration acceptance and conversion into strategy events remain pending.
 
 ## Integrity Checks
 
