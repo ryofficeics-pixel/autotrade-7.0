@@ -34,10 +34,12 @@ Direct implementation completed during this audit:
   and deterministic integrity replay;
 - kept all new data capture outside the trading hot path and PAPER-only.
 
-A 10-second proof from committed capture revision `b237c51` captured ETH/USDT in one connection with
-145 events, one synchronized snapshot, zero dropped events and zero sequence gaps, then reproduced
-final hash `3593dce3476a7015b3ff397b87a9d93addececfce7a6907a064c9b9b3821ea04` in replay. That proves the
-capture vertical slice works; it does not prove long-run reliability or trading edge.
+A 10-second proof from committed book-replay revision `dd23d03` captured ETH/USDT in one connection
+with 284 events, one synchronized snapshot, zero dropped events and zero sequence gaps. Replay
+reproduced event hash `45e5ed13206455fd0571eb6f15b67fc575d489040ff3e73790e20a2a05c92fe5`
+and deterministic final-book digest
+`dead2047ce5033dcca505ae5fdda5026070f37d194aef06faa5d7e17f6fb577c`. That proves the capture/book
+vertical slice works; it does not prove long-run reliability or trading edge.
 
 # 2. Verified Current Architecture
 
@@ -113,7 +115,7 @@ stop the backend strategy process.
 | Watchdog is independent and singleton |  | Yes |  | It verifies service/data/listener ownership, but lacks disk, clock, memory and capture-session checks. |
 | TradingView is isolated from execution | Yes |  |  | `TradingViewMonitor` has no strategy/risk/order reference; weight is zero and UI-only. |
 | Gate WebSocket/L2/trade capture is absent |  |  | Yes, now outdated | A live public capture foundation now exists, but it is intentionally not an execution feed. |
-| Complete local book reconstruction exists |  |  | Yes | Snapshot/delta IDs are synchronized, but depth state/derived features are not yet replayed into strategies. |
+| Complete local book reconstruction exists |  | Yes |  | Deterministic replay now reconstructs and validates final depth plus spread/depth/imbalance/microprice; no book stream feeds strategies yet. |
 | Deterministic replay exists |  | Yes |  | Hash-chain replay is deterministic; same-code strategy replay and simulator output are pending. |
 | Measured latency and realistic execution exist |  |  | Yes | Capture measures feed latency; the simulator does not yet use submission/ack/cancel/fill latency. |
 | Funding is accounted in PnL |  |  | Yes | Funding is displayed from REST/raw WS but never debited or credited to positions. |
@@ -213,6 +215,8 @@ matching REST depth snapshots. It provides:
 - an immutable session manifest with dataset, symbol, time, revision, event, gap, drop and latency
   metadata;
 - deterministic integrity replay that rejects modified, reordered or missing rows.
+- deterministic local-book replay with absolute-size replacement, zero deletion, overlap/duplicate
+  handling, gap resnapshot recovery, crossed/empty-book rejection and a final metrics digest.
 
 Official Gate's required local-book procedure is the design authority: subscribe and buffer deltas,
 retrieve a REST snapshot with `id`, start at `U <= id + 1 <= u`, use absolute sizes, delete zero size,
@@ -220,10 +224,10 @@ and resnapshot on a gap. See the [Gate futures WebSocket documentation](https://
 
 ## Still required
 
-1. Maintain the actual per-symbol top-20 book state and validate non-crossing, monotonic levels and
-   snapshot depth.
-2. Emit deterministic derived events: best bid/ask/size, depth, imbalance, microprice, trade-flow
-   imbalance, update rate, volatility and latency.
+1. Convert the validated replay book into time-ordered derived events consumable by the same strategy
+   path; no strategy may consume an unsynchronized book.
+2. Add trade-flow imbalance, update rate and rolling volatility to the implemented final-book spread,
+   depth, imbalance and microprice metrics.
 3. Add contract metadata capture and dataset revision.
 4. Run one-hour, six-hour and 24-hour acceptance sessions; fail a session on drops, unrecovered gaps,
    invalid books, excessive clock skew or disk exhaustion risk.
@@ -361,8 +365,8 @@ same dataset + same Git revision + same config + same seed
 → identical metrics
 ```
 
-Current status: raw integrity replay passes. Book reconstruction, Nautilus event conversion and
-same-strategy journal determinism are the next P0 implementation.
+Current status: raw integrity replay and deterministic final-book reconstruction pass. Nautilus event
+conversion and same-strategy journal determinism are the next P0 implementation.
 
 # 9. Strategy Assessment
 
@@ -732,6 +736,8 @@ files plus a small status document at current scale; no broker is justified.
 
 ### P0.1 Reconstruct and validate the local Gate book
 
+**Status: implemented in `dd23d03`; long-run validation remains part of P0.2.**
+
 - **WHY:** Raw deltas are not usable research state until snapshots and updates produce a verified,
   non-crossed depth book.
 - **DEPENDENCY:** Implemented capture/sequence foundation.
@@ -828,29 +834,28 @@ value.
 
 # 20. Exact Next 10 Tasks
 
-1. **Implement a deterministic top-20 Gate local-book builder** from the existing raw snapshot/delta
-   sessions, including absolute-size update, zero deletion, overlap continuity, gap resnapshot,
-   non-crossed validation and golden replay digest tests.
-2. Add capture status, free-disk forecast, UTC clock-offset check, graceful incomplete manifests and a
-   one-hour acceptance runner; measure bytes/events per symbol.
-3. Run and verify six-hour then 24-hour public capture sessions across a controlled 5–8 symbol
+1. **Add capture status, free-disk forecast, UTC clock-offset check, graceful incomplete manifests and
+   a one-hour acceptance runner; measure bytes/events per symbol.**
+2. Run and verify six-hour then 24-hour public capture sessions across a controlled 5–8 symbol
    universe; reject or segment any degraded interval.
-4. Convert accepted book/trade/ticker records into Nautilus data objects with original exchange and
+3. Convert accepted book/trade/ticker records into Nautilus data objects with original exchange and
    local receive timestamps.
-5. Replay the unchanged REST momentum baseline through that event stream and require identical
+4. Replay the unchanged REST momentum baseline through that event stream and require identical
    decision/order/trade hashes on repeated runs.
-6. Load Gate contract metadata and replace inferred precision, fixed quantity and synthetic size
+5. Load Gate contract metadata and replace inferred precision, fixed quantity and synthetic size
    assumptions.
-7. Implement deterministic L2 taker depth-sweep fills with partial/unfilled quantity, measured latency,
+6. Implement deterministic L2 taker depth-sweep fills with partial/unfilled quantity, measured latency,
    fees, funding and mark-price accounting.
-8. Build the mandatory research report and lightweight SQLite experiment/strategy registry.
-9. Run baseline chronological holdout, purged walk-forward, cost/latency sensitivity and block-bootstrap
+7. Build the mandatory research report and lightweight SQLite experiment/strategy registry.
+8. Run baseline chronological holdout, purged walk-forward, cost/latency sensitivity and block-bootstrap
    analysis; record a `FAILED` or benchmark result, not a promotion.
-10. Implement one order-flow momentum and one liquidity-normalized mean-reversion challenger; only then
+9. Implement one order-flow momentum and one liquidity-normalized mean-reversion challenger; only then
     begin shadow champion/challenger comparison.
+10. Add drift monitoring and a human-reviewed promotion registry only after challengers pass the fixed
+    validation report.
 
-Task 1 is the highest-value next action because capture transport now works, but no strategy or
-simulator can safely consume L2 data until the local book is deterministic and integrity-gated.
+Task 1 is the highest-value next action because the local book now replays deterministically, but a
+ten-second session does not establish a trustworthy research corpus or unattended collector.
 
 # 21. Promotion Criteria Toward Live Trading
 
