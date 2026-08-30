@@ -29,8 +29,10 @@ Verified evidence:
 
 ## Phase 1B — Real Market Data
 
-Status: partial. Public Gate futures REST screening, stale-data detection, and explicit recovery are
-implemented. WebSocket L2/trade ingestion, sequence recovery, and raw capture remain pending.
+Status: partial. Public Gate futures REST screening, stale-data detection, explicit recovery, and
+the dependency-free Gate WebSocket subscription/normalization/raw-capture foundation are implemented.
+The live WebSocket connection loop, REST snapshot reconciliation, reconnect policy, and long-running
+capture acceptance run remain pending.
 
 - Gate.io public market data;
 - 5–10 candidate perpetual pairs;

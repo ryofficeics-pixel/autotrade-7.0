@@ -65,6 +65,11 @@ Preferred:
 
 Keep raw data separate from derived features.
 
+Current Phase 1 implementation starts with append-only JSONL capture for public Gate WebSocket
+messages. Each normalized row must preserve the original Gate payload, exchange timestamp, normalized
+UTC exchange time where available, and local receive UTC. Parquet conversion belongs after raw capture
+proves stable.
+
 ## Integrity Checks
 
 Halt trading research for a symbol when:
@@ -74,6 +79,10 @@ Halt trading research for a symbol when:
 - data age exceeds threshold;
 - local/exchange clock difference becomes implausible;
 - reconnect does not restore a valid snapshot.
+
+For `futures.order_book_update`, track `U` and `u` per contract. A full snapshot resets the local
+depth ID; a delta is continuous only when `U == previous u + 1`. Any gap requires dropping the local
+book and rebuilding from a fresh snapshot before that symbol can be trusted.
 
 ## Retention
 
