@@ -29,10 +29,11 @@ Verified evidence:
 
 ## Phase 1B — Real Market Data
 
-Status: partial. Public Gate futures REST screening, stale-data detection, explicit recovery, and
-the dependency-free Gate WebSocket subscription/normalization/raw-capture foundation are implemented.
-The live WebSocket connection loop, REST snapshot reconciliation, reconnect policy, and long-running
-capture acceptance run remain pending.
+Status: partial. Public Gate futures REST screening, stale-data detection and explicit recovery are
+implemented. A separate public Gate WebSocket capture command now provides subscriptions,
+normalization, bounded backpressure, REST snapshot/sequence synchronization, reconnects, atomic
+manifests and deterministic hash-chain verification. Full local depth reconstruction and a
+long-running capture acceptance run remain pending.
 
 - Gate.io public market data;
 - 5–10 candidate perpetual pairs;
@@ -47,7 +48,8 @@ Exit: stable long-running feed.
 
 Status: partial. Nautilus streaming paper execution now covers public best-bid/ask market fills,
 taker fees, configured adverse slippage, 1x position accounting and signal/fill audit. Historical
-replay, partial fills, measured latency, funding and queue-aware maker fills remain pending.
+raw-event integrity replay is available, but same-code strategy replay, partial fills, measured
+execution latency, funding and queue-aware maker fills remain pending.
 
 - replay captured data;
 - realistic costs;

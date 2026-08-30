@@ -24,8 +24,8 @@ class GateMarketDataError(ValueError):
 def _contract(value: object) -> str:
     symbol = str(value).strip().upper()
     base = symbol.removesuffix("_USDT")
-    if not base or not base.isascii() or not base.isalnum() or symbol != f"{base}_USDT":
-        raise GateMarketDataError("contract must be an ASCII BASE_USDT futures symbol")
+    if not base or not base.isalnum() or symbol != f"{base}_USDT" or len(symbol) > 32:
+        raise GateMarketDataError("contract must be a valid BASE_USDT futures symbol")
     return symbol
 
 
@@ -316,7 +316,10 @@ class GateOrderBookSequence:
         self._last_update_id[contract] = last_id
         if expected_previous is None:
             return "BOOTSTRAP"
-        if first_id != expected_previous + 1:
+        expected = expected_previous + 1
+        if last_id < expected:
+            return "DUPLICATE"
+        if not first_id <= expected <= last_id:
             self._last_update_id.pop(contract, None)
             return "GAP"
         return "OK"

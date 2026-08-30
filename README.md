@@ -50,6 +50,7 @@ Recommended reading order:
 10. `OPERATIONS_WINDOWS.md`
 11. `SECURITY.md`
 12. `CODEX_WORKFLOW.md`
+13. `AUTOTRADE_7_IMPROVEMENT_AUDIT.md`
 
 ## Safety Gate
 
@@ -81,6 +82,7 @@ check.bat
 start_bot.bat
 start_dashboard.bat
 install_autostart.bat
+capture_market_data.bat 3600
 ```
 
 Configuration lives in `config/paper.toml`. The three safety environment variables shown above may
@@ -101,6 +103,14 @@ Playwright runtime.
 dashboard only when the health endpoint is unavailable, waits up to 30 seconds for health, starts the
 local 15-minute watchdog, and then opens `http://127.0.0.1:8767/` in the default browser. Run
 `autostart_dashboard.bat` directly to use the same behavior immediately.
+
+`capture_market_data.bat` runs an isolated public-data research capture for the requested number of
+seconds (one hour by default) under `data/gate-captures`. It does not feed the paper trader. Verify a
+completed dataset with:
+
+```bat
+.venv\Scripts\python.exe -m autotrade replay-verify --dataset data\gate-captures\DATASET_ID
+```
 
 ## Optional TradingView Research Sidecar
 

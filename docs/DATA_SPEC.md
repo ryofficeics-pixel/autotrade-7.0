@@ -70,6 +70,13 @@ messages. Each normalized row must preserve the original Gate payload, exchange 
 UTC exchange time where available, and local receive UTC. Parquet conversion belongs after raw capture
 proves stable.
 
+The runnable capture command now connects to the public Gate futures WebSocket, records trades,
+best bid/ask, L2 updates and ticker messages, reconciles each symbol against a REST depth snapshot,
+and writes a hash-chained event stream plus an atomic manifest. Capture is isolated from trading and
+cannot influence entries, risk, sizing or execution. A dataset is accepted as `COMPLETE` only after
+one uninterrupted connection, zero sequence gaps, zero drops and a synchronized book sequence for
+every requested symbol. Full local depth reconstruction and long-duration acceptance remain pending.
+
 ## Integrity Checks
 
 Halt trading research for a symbol when:
@@ -81,8 +88,9 @@ Halt trading research for a symbol when:
 - reconnect does not restore a valid snapshot.
 
 For `futures.order_book_update`, track `U` and `u` per contract. A full snapshot resets the local
-depth ID; a delta is continuous only when `U == previous u + 1`. Any gap requires dropping the local
-book and rebuilding from a fresh snapshot before that symbol can be trusted.
+depth ID. With `expected = previous u + 1`, a delta is continuous only when
+`U <= expected <= u`; a delta whose `u < expected` is a duplicate. Any forward gap requires dropping
+the local book and rebuilding from a fresh snapshot before that symbol can be trusted.
 
 ## Retention
 

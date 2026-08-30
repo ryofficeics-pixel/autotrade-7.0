@@ -65,6 +65,9 @@ class GateMarketDataTests(unittest.TestCase):
         with self.assertRaisesRegex(GateMarketDataError, "20ms"):
             build_gate_ws_subscriptions(("BTC_USDT",), book_frequency="20ms", book_level="100")
 
+        unicode_request = build_gate_ws_subscriptions(("龙虾_USDT",), unix_time=123456)
+        self.assertIn("龙虾_USDT", str(unicode_request))
+
     def test_trade_updates_preserve_exchange_and_local_timestamps(self) -> None:
         records = normalize_gate_ws_message(
             json.dumps(
@@ -175,11 +178,19 @@ class GateMarketDataTests(unittest.TestCase):
             "OK",
         )
         self.assertEqual(
-            tracker.apply({**full, "first_update_id": 114, "last_update_id": 115, "full": False}),
+            tracker.apply({**full, "first_update_id": 112, "last_update_id": 113, "full": False}),
+            "OK",
+        )
+        self.assertEqual(
+            tracker.apply({**full, "first_update_id": 112, "last_update_id": 113, "full": False}),
+            "DUPLICATE",
+        )
+        self.assertEqual(
+            tracker.apply({**full, "first_update_id": 115, "last_update_id": 116, "full": False}),
             "GAP",
         )
         self.assertEqual(
-            tracker.apply({**full, "first_update_id": 116, "last_update_id": 117, "full": False}),
+            tracker.apply({**full, "first_update_id": 117, "last_update_id": 118, "full": False}),
             "BOOTSTRAP",
         )
 
