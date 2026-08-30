@@ -54,6 +54,12 @@ Use explicit states:
 
 `HALTED` must require explicit recovery/restart logic.
 
+The paper checkpoint persists the UTC risk day, start-of-day equity/trade count, all-time peak
+equity, halt state and halt reason. Legacy checkpoints are migrated from timestamped trade history;
+the daily-loss control must never use lifetime PnL. A daily-loss halt may roll into a new UTC day only
+at an explicit process restart. Other safety halts remain sticky until their failure is diagnosed and
+state integrity is proven.
+
 ## Automatic Halt Conditions
 
 Halt new entries when:
@@ -79,6 +85,9 @@ new snapshot passes validation and freshness checks.
 
 Auto-resume trading after any other critical state failure is not allowed. Execution, persistence,
 risk-limit and invalid-state failures remain `HALTED` until explicit recovery proves state integrity.
+
+A recovery flatten is allowed only against a quote received within the configured market-data stale
+limit. A later successful poll must not erase a previously recorded critical execution fault.
 
 ## Nautilus Risk Engine
 

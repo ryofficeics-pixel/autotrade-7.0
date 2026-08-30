@@ -216,6 +216,36 @@ class DashboardTests(unittest.TestCase):
         self.assertTrue(paused["controls"]["resume_allowed"])  # type: ignore[index]
         self.assertFalse(paused["controls"]["auto_resume_allowed"])  # type: ignore[index]
 
+    def test_execution_fault_remains_halted_after_later_good_snapshot(self) -> None:
+        settings = self.settings()
+        report = RuntimeReport("PAPER", "test", "TESTER-001", "GATE", "300", "1", True, True)
+        paper = self.paper()
+        state = DashboardState(
+            report,
+            settings,
+            paper,  # type: ignore[arg-type]
+            self.tradingview(),  # type: ignore[arg-type]
+        )
+        market: list[dict[str, object]] = [{"selected": True}]
+        state.apply_snapshot(market, 10, monotonic_now=100)
+        self.assertTrue(state.resume(monotonic_now=100))
+
+        good_process = paper.process  # type: ignore[attr-defined]
+
+        def fail_process(markets: object, *, entry_enabled: bool) -> None:
+            raise RuntimeError("execution state uncertain")
+
+        paper.process = fail_process  # type: ignore[attr-defined]
+        state.apply_snapshot(market, 10, monotonic_now=101)
+        paper.process = good_process  # type: ignore[attr-defined]
+        state.apply_snapshot(market, 10, monotonic_now=102)
+
+        halted = state.snapshot(monotonic_now=102)
+        self.assertEqual(halted["trading_state"], "HALTED")
+        self.assertFalse(halted["controls"]["resume_allowed"])  # type: ignore[index]
+        self.assertFalse(halted["controls"]["auto_resume_allowed"])  # type: ignore[index]
+        self.assertIn("execution state uncertain", halted["alerts"][0])  # type: ignore[index]
+
     def test_control_requests_require_local_host_and_origin(self) -> None:
         headers = Message()
         headers["Host"] = "127.0.0.1:8765"

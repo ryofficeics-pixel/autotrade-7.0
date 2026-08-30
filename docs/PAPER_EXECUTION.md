@@ -25,6 +25,11 @@ Closed equity, fees, trade count and any open paper position are atomically chec
 `logs/paper-state.json`, including the actual position symbol. After an unclean restart with a persisted position, entries fail closed until
 the user invokes `FLATTEN PAPER POSITIONS` against a fresh quote and then explicitly resumes.
 
+Checkpoint schema version 2 also stores the UTC risk window, day-start equity/trades, persistent
+all-time peak, risk halt and halt reason. Writes reject non-finite state, flush and `fsync` before an
+atomic replace. Daily PnL and trade count therefore survive restart without being confused with
+lifetime performance.
+
 Partial fills, measured acknowledgement/cancel latency, funding debits and queue-aware maker fills
 remain pending L2/trade capture. Until those exist, results are research evidence only and must not be
 treated as live-ready performance.

@@ -185,7 +185,6 @@ class DashboardState:
                     markets,
                     entry_enabled=not self._manual_paused and not self._integrity_halted,
                 )
-                self._execution_error = None
                 if self._paper.snapshot().risk_halted:
                     self._integrity_halted = True
             except Exception as exc:  # Strategy/execution boundary must fail closed.

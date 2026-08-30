@@ -3,11 +3,12 @@ from __future__ import annotations
 import json
 import logging
 import math
+import os
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from decimal import ROUND_DOWN, Decimal, InvalidOperation
-from time import time_ns
+from time import monotonic, time_ns
 
 from nautilus_trader.backtest.engine import BacktestEngine
 from nautilus_trader.config import (
@@ -30,6 +31,7 @@ from autotrade.runtime import RuntimeReport
 TAKER_FEE = Decimal("0.0005")
 SAFETY_BUFFER_BPS = 3.0
 TRADE_HISTORY_HOURS = 48
+STATE_SCHEMA_VERSION = 2
 
 
 class MomentumConfig(StrategyConfig, frozen=True):
@@ -344,9 +346,11 @@ class PaperTrader:
         self._last_ts = 0
         self._last_marks: dict[str, Price] = {}
         self._last_markets: dict[str, dict[str, object]] = {}
+        self._last_market_monotonic: dict[str, float] = {}
         self._entry_enabled = False
         self._selected_symbol: str | None = None
         self._risk_halted = False
+        self._risk_halt_reason: str | None = None
         self._peak_equity = settings.starting_balance_usdt
         self._events_path = settings.log_directory / "paper-events.jsonl"
         self._state_path = settings.log_directory / "paper-state.json"
@@ -354,6 +358,9 @@ class PaperTrader:
         self._initial_balance = settings.starting_balance_usdt
         self._restored_trades = 0
         self._restored_fees = Decimal(0)
+        self._risk_day_utc = datetime.now(UTC).date().isoformat()
+        self._day_start_equity = settings.starting_balance_usdt
+        self._trades_at_day_start = 0
         self._recovery_position: dict[str, object] | None = None
         self._state_error: str | None = None
         self._load_state()
@@ -369,6 +376,8 @@ class PaperTrader:
             if isinstance(item.get("symbol"), str)
         }
         self._last_markets.update(current_markets)
+        received = monotonic()
+        self._last_market_monotonic.update(dict.fromkeys(current_markets, received))
         if self._recovery_position is not None or self._state_error is not None:
             return
         if self._engine is None:
@@ -506,7 +515,8 @@ class PaperTrader:
         armed = self._entry_enabled and self._settings.strategy_enabled and not self._risk_halted
         alerts = []
         if self._risk_halted:
-            alerts.append("Paper risk limit reached; new entries are halted.")
+            reason = self._risk_halt_reason or "UNKNOWN"
+            alerts.append(f"Paper risk limit reached ({reason}); new entries are halted.")
         elif not armed:
             alerts.append("REST Momentum tournament is paused.")
         elif any(
@@ -714,8 +724,10 @@ class PaperTrader:
         drawdown = Decimal(str(snapshot.portfolio["drawdown_pct"]))
         if pnl <= -self._settings.strategy_daily_loss_usdt:
             self._risk_halted = True
+            self._risk_halt_reason = self._risk_halt_reason or "DAILY_LOSS"
         if drawdown >= self._settings.strategy_max_drawdown_pct:
             self._risk_halted = True
+            self._risk_halt_reason = self._risk_halt_reason or "MAX_DRAWDOWN"
         if self._risk_halted:
             self._entry_enabled = False
             for strategy in self._strategies.values():
@@ -724,6 +736,10 @@ class PaperTrader:
                     strategy.request_flatten()
 
     def _inactive_snapshot(self, *, status: str, positions: int, alert: str) -> PaperSnapshot:
+        alerts = [alert]
+        if self._risk_halted:
+            reason = self._risk_halt_reason or "UNKNOWN"
+            alerts.insert(0, f"Paper risk limit reached ({reason}); new entries are halted.")
         return PaperSnapshot(
             portfolio=self._portfolio(
                 self._initial_balance,
@@ -752,7 +768,7 @@ class PaperTrader:
             orders=0,
             positions=positions,
             risk_halted=self._risk_halted or self._state_error is not None,
-            alerts=[alert],
+            alerts=alerts,
             open_trade=self._open_trade(None),
             trade_history=self._recent_trade_history(),
         )
@@ -762,11 +778,23 @@ class PaperTrader:
             return
         try:
             state = json.loads(self._state_path.read_text(encoding="utf-8"))
+            if not isinstance(state, dict):
+                raise ValueError("state must be an object")
+            schema_version = int(state.get("schema_version", 1))
+            if schema_version not in {1, STATE_SCHEMA_VERSION}:
+                raise ValueError("unsupported state schema")
             if state.get("mode") != "PAPER":
                 raise ValueError("mode mismatch")
-            self._initial_balance = Decimal(str(state["balance_usdt"]))
+            self._initial_balance = _state_decimal(state["balance_usdt"], "balance_usdt")
+            if self._initial_balance < 0:
+                raise ValueError("balance_usdt must be non-negative")
             self._restored_trades = int(state.get("trades", 0))
-            self._restored_fees = Decimal(str(state.get("fees_usdt", 0)))
+            if self._restored_trades < 0:
+                raise ValueError("trades must be non-negative")
+            self._restored_fees = _state_decimal(state.get("fees_usdt", 0), "fees_usdt")
+            if self._restored_fees < 0:
+                raise ValueError("fees_usdt must be non-negative")
+            self._load_risk_state(state)
             position = state.get("position")
             if position is not None and not isinstance(position, dict):
                 raise ValueError("position must be an object")
@@ -775,12 +803,98 @@ class PaperTrader:
                 symbol = str(position.get("symbol", ""))
                 if not symbol.endswith("_USDT"):
                     raise ValueError("position symbol is invalid")
+                if str(position.get("side")) not in {"LONG", "SHORT"}:
+                    raise ValueError("position side is invalid")
+                if _state_decimal(position.get("quantity"), "position.quantity") <= 0:
+                    raise ValueError("position quantity must be positive")
+                if _state_decimal(position.get("entry_price"), "position.entry_price") <= 0:
+                    raise ValueError("position entry_price must be positive")
+                if _state_decimal(position.get("entry_fee_usdt", 0), "position.entry_fee_usdt") < 0:
+                    raise ValueError("position entry_fee_usdt must be non-negative")
             self._recovery_position = position
             if position is not None:
                 self._risk_halted = True
-        except (OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
+                self._risk_halt_reason = "RECOVERY_REQUIRED"
+            self._restore_risk_halt_for_current_window()
+        except (
+            OSError,
+            ValueError,
+            TypeError,
+            KeyError,
+            InvalidOperation,
+            OverflowError,
+            json.JSONDecodeError,
+        ) as exc:
             self._state_error = str(exc)[:200]
             self._risk_halted = True
+            self._risk_halt_reason = "STATE_INVALID"
+
+    def _load_risk_state(self, state: dict[str, object]) -> None:
+        today = datetime.now(UTC).date().isoformat()
+        risk_day = state.get("risk_day_utc")
+        if isinstance(risk_day, str):
+            datetime.strptime(risk_day, "%Y-%m-%d")
+            self._risk_day_utc = risk_day
+            self._day_start_equity = _state_decimal(
+                state.get("day_start_equity_usdt"), "day_start_equity_usdt"
+            )
+            self._trades_at_day_start = int(str(state.get("trades_at_day_start", 0)))
+        else:
+            today_trades = [
+                trade
+                for trade in self._trade_history
+                if str(trade.get("closed_at", "")).startswith(today)
+            ]
+            today_pnl = sum(
+                (Decimal(str(trade["realized_pnl_usdt"])) for trade in today_trades),
+                Decimal(0),
+            )
+            self._risk_day_utc = today
+            self._day_start_equity = self._initial_balance - today_pnl
+            self._trades_at_day_start = max(0, self._restored_trades - len(today_trades))
+        if self._day_start_equity < 0 or self._trades_at_day_start < 0:
+            raise ValueError("daily risk window is invalid")
+        self._peak_equity = max(
+            self._settings.starting_balance_usdt,
+            self._initial_balance,
+            _state_decimal(
+                state.get("peak_equity_usdt", self._initial_balance),
+                "peak_equity_usdt",
+            ),
+        )
+        risk_halted = state.get("risk_halted", False)
+        if not isinstance(risk_halted, bool):
+            raise ValueError("risk_halted must be boolean")
+        reason = state.get("risk_halt_reason")
+        if reason is not None and (not isinstance(reason, str) or len(reason) > 64):
+            raise ValueError("risk_halt_reason is invalid")
+        self._risk_halted = risk_halted
+        self._risk_halt_reason = reason
+        if (
+            self._risk_halted
+            and self._risk_halt_reason == "DAILY_LOSS"
+            and self._risk_day_utc < today
+        ):
+            # A process restart on a later UTC day is the explicit daily-loss recovery boundary.
+            self._risk_halted = False
+            self._risk_halt_reason = None
+            self._risk_day_utc = today
+            self._day_start_equity = self._initial_balance
+            self._trades_at_day_start = self._restored_trades
+
+    def _restore_risk_halt_for_current_window(self) -> None:
+        daily_pnl = self._initial_balance - self._day_start_equity
+        drawdown = (
+            (self._peak_equity - self._initial_balance) / self._peak_equity * 100
+            if self._peak_equity
+            else Decimal(0)
+        )
+        if daily_pnl <= -self._settings.strategy_daily_loss_usdt:
+            self._risk_halted = True
+            self._risk_halt_reason = self._risk_halt_reason or "DAILY_LOSS"
+        if drawdown >= self._settings.strategy_max_drawdown_pct:
+            self._risk_halted = True
+            self._risk_halt_reason = self._risk_halt_reason or "MAX_DRAWDOWN"
 
     def _persist_state(self) -> None:
         if self._engine is None or not self._strategies:
@@ -811,25 +925,34 @@ class PaperTrader:
             (strategy.fees_usdt for strategy in self._strategies.values()), Decimal(0)
         )
         state = {
+            "schema_version": STATE_SCHEMA_VERSION,
             "mode": "PAPER",
             "symbol": "MULTI",
             "balance_usdt": str(balance_money.as_decimal()),
             "trades": trades,
             "fees_usdt": str(fees),
             "position": position,
+            "risk_day_utc": self._risk_day_utc,
+            "day_start_equity_usdt": str(self._day_start_equity),
+            "trades_at_day_start": self._trades_at_day_start,
+            "peak_equity_usdt": str(self._peak_equity),
+            "risk_halted": self._risk_halted,
+            "risk_halt_reason": self._risk_halt_reason,
             "updated_ns": time_ns(),
         }
-        self._state_path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = self._state_path.with_suffix(".tmp")
-        temporary.write_text(json.dumps(state, separators=(",", ":")), encoding="utf-8")
-        temporary.replace(self._state_path)
+        self._write_state(state)
 
     def _flatten_recovery(self) -> None:
         if self._recovery_position is None:
             raise RuntimeError("no recovery position exists")
         symbol = str(self._recovery_position.get("symbol", ""))
         market = self._last_markets.get(symbol)
-        if market is None:
+        received = self._last_market_monotonic.get(symbol)
+        if (
+            market is None
+            or received is None
+            or monotonic() - received > self._settings.market_stale_after_seconds
+        ):
             raise RuntimeError("recovery position has no fresh market")
         side = str(self._recovery_position.get("side"))
         quantity = Decimal(str(self._recovery_position["quantity"]))
@@ -868,18 +991,34 @@ class PaperTrader:
         )
         self._recovery_position = None
         self._risk_halted = False
+        self._risk_halt_reason = None
+        self._peak_equity = max(self._peak_equity, self._initial_balance)
+        self._restore_risk_halt_for_current_window()
         state = {
+            "schema_version": STATE_SCHEMA_VERSION,
             "mode": "PAPER",
             "symbol": "MULTI",
             "balance_usdt": str(self._initial_balance),
             "trades": self._restored_trades,
             "fees_usdt": str(self._restored_fees),
             "position": None,
+            "risk_day_utc": self._risk_day_utc,
+            "day_start_equity_usdt": str(self._day_start_equity),
+            "trades_at_day_start": self._trades_at_day_start,
+            "peak_equity_usdt": str(self._peak_equity),
+            "risk_halted": self._risk_halted,
+            "risk_halt_reason": self._risk_halt_reason,
             "updated_ns": time_ns(),
         }
+        self._write_state(state)
+
+    def _write_state(self, state: dict[str, object]) -> None:
         self._state_path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self._state_path.with_suffix(".tmp")
-        temporary.write_text(json.dumps(state, separators=(",", ":")), encoding="utf-8")
+        with temporary.open("w", encoding="utf-8") as file:
+            json.dump(state, file, allow_nan=False, separators=(",", ":"))
+            file.flush()
+            os.fsync(file.fileno())
         temporary.replace(self._state_path)
 
     def _portfolio(
@@ -889,6 +1028,11 @@ class PaperTrader:
         trades: int,
         positions: int,
     ) -> dict[str, float | int]:
+        today = datetime.now(UTC).date().isoformat()
+        if today != self._risk_day_utc:
+            self._risk_day_utc = today
+            self._day_start_equity = equity
+            self._trades_at_day_start = trades
         self._peak_equity = max(self._peak_equity, equity)
         drawdown = (
             (self._peak_equity - equity) / self._peak_equity * 100
@@ -897,9 +1041,9 @@ class PaperTrader:
         )
         return {
             "equity_usdt": float(equity),
-            "daily_pnl_usdt": float(equity - self._settings.starting_balance_usdt),
+            "daily_pnl_usdt": float(equity - self._day_start_equity),
             "drawdown_pct": float(drawdown),
-            "trades_today": trades,
+            "trades_today": max(0, trades - self._trades_at_day_start),
             "open_positions": positions,
             "fees_usdt": float(fees),
             "slippage_usdt": float(fees / TAKER_FEE * self._settings.strategy_slippage_bps / 10_000)
@@ -1093,6 +1237,16 @@ def _decimal_places(value: object) -> int:
     if not isinstance(exponent, int):
         return 8
     return max(0, -exponent)
+
+
+def _state_decimal(value: object, field_name: str) -> Decimal:
+    try:
+        parsed = Decimal(str(value))
+    except (InvalidOperation, ValueError, TypeError) as exc:
+        raise ValueError(f"{field_name} must be numeric") from exc
+    if not parsed.is_finite():
+        raise ValueError(f"{field_name} must be finite")
+    return parsed
 
 
 def _fill_totals(fills: list[dict[str, object]]) -> tuple[Decimal, Decimal, Decimal]:

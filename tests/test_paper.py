@@ -466,6 +466,128 @@ class PaperTraderTests(unittest.TestCase):
             finally:
                 trader.close()
 
+    def test_legacy_state_migrates_lifetime_pnl_to_current_utc_day(self) -> None:
+        report = RuntimeReport("PAPER", "test", "TESTER-001", "GATE", "300", "1", True, True)
+        now = datetime.now(UTC)
+        base = {
+            "event": "position_closed",
+            "symbol": "ETH_USDT",
+            "side": "LONG",
+            "quantity": 1,
+            "open_price": 100,
+            "close_price": 95,
+            "pnl_pct": -5,
+            "fee_usdt": 0,
+            "reason": "STOP_LOSS",
+        }
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, SAFE_ENV):
+            path = Path(directory)
+            events = [
+                {
+                    **base,
+                    "timestamp_utc": now.isoformat(),
+                    "realized_pnl_usdt": -5,
+                },
+                {
+                    **base,
+                    "timestamp_utc": (now - timedelta(days=1)).isoformat(),
+                    "realized_pnl_usdt": -2,
+                },
+            ]
+            (path / "paper-events.jsonl").write_text(
+                "\n".join(json.dumps(event) for event in events), encoding="utf-8"
+            )
+            (path / "paper-state.json").write_text(
+                json.dumps(
+                    {
+                        "mode": "PAPER",
+                        "symbol": "MULTI",
+                        "balance_usdt": "293",
+                        "trades": 2,
+                        "fees_usdt": "0",
+                        "position": None,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            settings = replace(load_settings(), log_directory=path)
+            trader = PaperTrader(report, settings, logging.getLogger("test.paper.daily-migrate"))
+            try:
+                snapshot = trader.snapshot()
+                self.assertAlmostEqual(snapshot.portfolio["daily_pnl_usdt"], -5.0)
+                self.assertEqual(snapshot.portfolio["trades_today"], 1)
+                self.assertFalse(snapshot.risk_halted)
+            finally:
+                trader.close()
+
+    def test_daily_risk_halt_is_persisted_for_current_utc_day(self) -> None:
+        report = RuntimeReport("PAPER", "test", "TESTER-001", "GATE", "300", "1", True, True)
+        today = datetime.now(UTC).date().isoformat()
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, SAFE_ENV):
+            path = Path(directory)
+            (path / "paper-state.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": 2,
+                        "mode": "PAPER",
+                        "symbol": "MULTI",
+                        "balance_usdt": "293",
+                        "trades": 1,
+                        "fees_usdt": "0.1",
+                        "position": None,
+                        "risk_day_utc": today,
+                        "day_start_equity_usdt": "300",
+                        "trades_at_day_start": 0,
+                        "peak_equity_usdt": "300",
+                        "risk_halted": True,
+                        "risk_halt_reason": "DAILY_LOSS",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            settings = replace(load_settings(), log_directory=path)
+            trader = PaperTrader(report, settings, logging.getLogger("test.paper.risk-persist"))
+            try:
+                snapshot = trader.snapshot()
+                self.assertTrue(snapshot.risk_halted)
+                self.assertAlmostEqual(snapshot.portfolio["daily_pnl_usdt"], -7.0)
+                self.assertIn("DAILY_LOSS", snapshot.alerts[0])
+            finally:
+                trader.close()
+
+    def test_recovery_flatten_rejects_stale_cached_quote(self) -> None:
+        report = RuntimeReport("PAPER", "test", "TESTER-001", "GATE", "300", "1", True, True)
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, SAFE_ENV):
+            path = Path(directory)
+            (path / "paper-state.json").write_text(
+                json.dumps(
+                    {
+                        "mode": "PAPER",
+                        "symbol": "MULTI",
+                        "balance_usdt": "300",
+                        "trades": 0,
+                        "fees_usdt": "0",
+                        "position": {
+                            "symbol": "ETH_USDT",
+                            "side": "LONG",
+                            "quantity": 0.1,
+                            "entry_price": 100,
+                            "entry_fee_usdt": 0.005,
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            settings = replace(load_settings(), log_directory=path, market_stale_after_seconds=15)
+            trader = PaperTrader(report, settings, logging.getLogger("test.paper.stale-flatten"))
+            try:
+                with patch("autotrade.paper.monotonic", side_effect=[100.0, 116.0]):
+                    trader.process(market(100), entry_enabled=False)
+                    with self.assertRaisesRegex(RuntimeError, "no fresh market"):
+                        trader.flatten()
+            finally:
+                trader.close()
+
 
 if __name__ == "__main__":
     unittest.main()
