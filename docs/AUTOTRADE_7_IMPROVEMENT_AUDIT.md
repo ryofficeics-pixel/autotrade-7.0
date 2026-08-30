@@ -34,9 +34,10 @@ Direct implementation completed during this audit:
   and deterministic integrity replay;
 - kept all new data capture outside the trading hot path and PAPER-only.
 
-A 10-second merged live proof captured ETH/USDT in one connection with 141 events, one synchronized
-snapshot, zero dropped events, zero sequence gaps, and a reproducible final event hash. That proves
-the capture vertical slice works; it does not prove long-run reliability or trading edge.
+A 10-second proof from committed capture revision `b237c51` captured ETH/USDT in one connection with
+145 events, one synchronized snapshot, zero dropped events and zero sequence gaps, then reproduced
+final hash `3593dce3476a7015b3ff397b87a9d93addececfce7a6907a064c9b9b3821ea04` in replay. That proves the
+capture vertical slice works; it does not prove long-run reliability or trading edge.
 
 # 2. Verified Current Architecture
 
