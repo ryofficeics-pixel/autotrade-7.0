@@ -1,0 +1,58 @@
+[trading]
+mode = "PAPER"
+live_trading_enabled = false
+live_confirmation = ""
+venue = "GATE"
+trader_id = "SCALPER-PAPER-001"
+starting_balance_usdt = "300"
+leverage = "1"
+
+[logging]
+console_level = "WARNING"
+file_level = "INFO"
+directory = "logs"
+file_name = "engine"
+max_file_size_bytes = 10000000
+max_backup_count = 5
+
+[market_data]
+poll_seconds = 5
+stale_after_seconds = 15
+active_symbols = 8
+minimum_quote_volume = "5000000"
+maximum_spread_bps = "12"
+
+[paper_strategy]
+enabled = true
+symbol = "ETH_USDT"
+notional_usdt = "30"
+window = 12
+persistence_ticks = 5
+regime_window = 36
+entry_threshold_bps = "20"
+minimum_net_edge_bps = "12"
+minimum_confidence = "0.60"
+stop_loss_bps = "35"
+take_profit_bps = "55"
+max_hold_seconds = 300
+cooldown_seconds = 60
+slippage_bps = "2"
+daily_loss_usdt = "6"
+max_drawdown_pct = "3"
+
+[dashboard]
+host = "127.0.0.1"
+port = 8767
+
+[tradingview]
+enabled = true
+confirmation_mode = "async"
+weight = "0.00"
+timeout_ms = 2500
+cache_enabled = true
+cache_ttl_seconds = 15
+poll_seconds = 15
+stale_after_seconds = 45
+expected_timeframe = "5"
+pine_enabled = true
+screenshot_enabled = false

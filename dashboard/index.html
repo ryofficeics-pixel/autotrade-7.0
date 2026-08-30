@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Scalper Paper Operations</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark">S</span><span>SCALPER</span></div>
+    <div class="top-status" aria-live="polite">
+      <span class="badge paper">PAPER</span>
+      <span class="venue">Gate.io Perpetuals</span>
+      <span id="engine-status" class="status neutral">ENGINE CHECKING</span>
+      <span id="data-status" class="status neutral">DATA CONNECTING</span>
+      <span id="latency" class="latency">— ms</span>
+    </div>
+  </header>
+
+  <aside class="sidebar" aria-label="Primary navigation">
+    <a class="active" href="#overview">Overview</a>
+    <a href="#markets">Markets</a>
+    <a href="#trades">Trades</a>
+    <a href="#strategies">Strategies</a>
+    <a href="#health">Health</a>
+  </aside>
+
+  <main>
+    <section id="overview" class="hero">
+      <div>
+        <p class="eyebrow">OPERATING STATE</p>
+        <h1 id="trading-state">LOADING</h1>
+        <p id="state-detail" class="muted">Waiting for authoritative backend state.</p>
+      </div>
+      <div class="controls" aria-label="Paper controls">
+        <button id="pause-button" class="danger" disabled>PAUSE NEW ENTRIES</button>
+        <button id="resume-button" disabled>RESUME PAPER</button>
+        <button id="flatten-button" disabled title="No paper positions exist">FLATTEN PAPER POSITIONS</button>
+        <button id="restart-button">RESTART DATA FEED</button>
+      </div>
+    </section>
+
+    <section class="metrics" aria-label="Portfolio metrics">
+      <article><span>Equity</span><strong id="equity">—</strong><small>SIMULATED USDT</small></article>
+      <article><span>Today PnL</span><strong id="pnl">—</strong><small>AFTER COSTS</small></article>
+      <article><span>Drawdown</span><strong id="drawdown">—</strong><small>FROM PAPER PEAK</small></article>
+      <article><span>Trades</span><strong id="trades">—</strong><small>TODAY</small></article>
+      <article><span>Exposure</span><strong id="positions">—</strong><small>OPEN POSITIONS</small></article>
+      <article><span>Active</span><strong id="active-symbols">—</strong><small>SCREENED MARKETS</small></article>
+    </section>
+
+    <section id="open-trade-ticker" class="trade-ticker" aria-live="polite" hidden>OPEN PAPER TRADE —</section>
+
+    <div class="grid">
+      <section id="markets" class="panel markets-panel">
+        <header><div><p class="eyebrow">PUBLIC MARKET DATA</p><h2>Gate Futures Screen</h2></div><span class="muted">5s REST snapshot</span></header>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Market</th><th>Last</th><th>24h</th><th>Spread</th><th>Volume</th><th>Funding</th><th>Screen</th><th>Confidence</th><th>Signal</th><th>State</th></tr></thead>
+            <tbody id="market-rows"><tr><td colspan="10" class="empty">Waiting for Gate market data…</td></tr></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="health" class="panel health-panel">
+        <header><div><p class="eyebrow">FAIL-CLOSED STATUS</p><h2>System Health</h2></div></header>
+        <dl>
+          <div><dt>Execution</dt><dd>SIMULATION ONLY</dd></div>
+          <div><dt>Risk engine</dt><dd id="risk-health">CHECKING</dd></div>
+          <div><dt>Market source</dt><dd id="data-source">—</dd></div>
+          <div><dt>Data age</dt><dd id="data-age">—</dd></div>
+          <div><dt>Last event</dt><dd id="last-event">—</dd></div>
+          <div><dt>Orders / positions</dt><dd id="orders-positions">0 / 0</dd></div>
+        </dl>
+        <div id="tradingview-card" class="tv-card" aria-label="TradingView secondary intelligence">
+          <div class="tv-card-title">
+            <div><p class="eyebrow">SECONDARY · RESEARCH ONLY</p><strong>TradingView MCP</strong></div>
+            <span id="tv-status" class="status neutral">DISABLED</span>
+          </div>
+          <div class="tv-details">
+            <span>Chart</span><strong id="tv-symbol">—</strong>
+            <span>Timeframe</span><strong id="tv-timeframe">—</strong>
+            <span>Bias / confidence</span><strong id="tv-bias">UNAVAILABLE / —</strong>
+            <span>Secondary price / divergence</span><strong id="tv-price">— / —</strong>
+            <span>Indicator studies</span><strong id="tv-indicators">—</strong>
+            <span>Regime / Pine</span><strong id="tv-regime">UNAVAILABLE / UNAVAILABLE</strong>
+            <span>Nautilus agreement</span><strong id="tv-agreement">UNAVAILABLE</strong>
+            <span>Latency / freshness</span><strong id="tv-timing">— / —</strong>
+          </div>
+          <p id="tv-detail" class="tv-detail">No execution influence. Gate and Nautilus remain authoritative.</p>
+        </div>
+        <div id="alerts" class="alerts" aria-live="assertive"></div>
+      </section>
+    </div>
+
+    <section id="trades" class="panel trades-panel">
+      <header><div><p class="eyebrow">PAPER EXECUTION AUDIT</p><h2>Trade History</h2></div><span class="muted">Last 48 hours</span></header>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Closed</th><th>Market</th><th>Side</th><th>Open</th><th>Close</th><th>PnL</th><th>PnL %</th><th>Fees</th><th>Exit</th></tr></thead>
+          <tbody id="trade-rows"><tr><td colspan="9" class="empty">No timestamped paper trades in the last 48 hours.</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="strategies" class="panel strategies">
+      <header><div><p class="eyebrow">STRATEGY LAB</p><h2>Challengers</h2></div><span id="strategy-badge" class="badge neutral">CHECKING</span></header>
+      <div class="strategy-grid">
+        <article><strong>REST Momentum</strong><span id="strategy-status">CHECKING</span><p id="strategy-detail">Waiting for authoritative paper-engine state.</p></article>
+        <article><strong>Mean Reversion</strong><span>NOT IMPLEMENTED</span><p>Awaiting replay-ready research data.</p></article>
+        <article><strong>Micro Maker</strong><span>NOT IMPLEMENTED</span><p>Awaiting queue-aware paper execution.</p></article>
+      </div>
+    </section>
+  </main>
+
+  <div id="connection-banner" class="connection-banner" hidden>BACKEND UNAVAILABLE — CONTROLS DISABLED</div>
+</body>
+</html>

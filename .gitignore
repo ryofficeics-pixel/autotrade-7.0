@@ -1,0 +1,16 @@
+.env
+.env.*
+!.env.example
+.venv/
+__pycache__/
+*.py[cod]
+.mypy_cache/
+.ruff_cache/
+.playwright-cli/
+data/
+logs/
+*.db
+*.sqlite
+playwright-report/
+test-results/
+vendor/tradingview-mcp/

@@ -1,0 +1,5 @@
+repository=https://github.com/tradesdontlie/tradingview-mcp.git
+commit=c05b8f5755ed8e64ea242de88ddbf46aa24d56a4
+package_version=1.0.0
+node_version=24.19.0
+npm_version=11.6.1
