@@ -51,6 +51,11 @@ button:hover:not(:disabled) { border-color: var(--blue); background: #1a2535; }
 button.danger { border-color: #7d3038; color: #ffadb4; }
 button:disabled { opacity: .38; cursor: not-allowed; }
 
+.integrity-banner { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-bottom: 18px; padding: 13px 16px; border: 1px solid #7d3038; color: #ffbbc1; background: #2a1116; }
+.integrity-banner.valid { border-color: #226b60; color: var(--cyan); background: #0d2724; }
+.integrity-banner.checking { border-color: #6d5831; color: var(--amber); background: #1b1811; }
+.integrity-banner span { font-size: 13px; text-align: right; }
+
 .metrics { display: grid; grid-template-columns: repeat(6, minmax(120px, 1fr)); gap: 1px; margin-bottom: 18px; border: 1px solid var(--line); background: var(--line); }
 .metrics article { min-width: 0; padding: 16px; background: var(--panel); }
 .metrics span, .metrics small { display: block; color: var(--muted); font-size: 12px; letter-spacing: .08em; }

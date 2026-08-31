@@ -146,6 +146,12 @@ from the backend Gate price every five seconds.
 - last reconnect;
 - current error state.
 
+The overview must show a prominent accounting banner independently from trading state. Health
+diagnostics expose accounting, risk, market data, strategy and execution-model states plus run/session,
+Git/config identity, event/checkpoint sequences and disk headroom. `Resume` is disabled whenever
+accounting is not `VALID`. Per-symbol quarantine is shown in the market table and must not imply a
+global account failure.
+
 ### 7. Settings
 
 Only safe Phase 1 settings.

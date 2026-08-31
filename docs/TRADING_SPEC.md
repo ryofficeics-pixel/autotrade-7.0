@@ -107,3 +107,22 @@ Taker orders may be used in the simulator where strategy logic explicitly justif
 - chasing a fixed daily return;
 - increasing leverage to rescue a weak strategy;
 - forcing trades to reach 20–30/day.
+
+## Paper Run and Accounting Authority
+
+Every fresh experiment has a durable `run_id`; each process has a `session_id`. New events use schema
+v3 with monotonic sequence, event identity, signal/order/fill/position identities, UTC timestamps and
+financial fields. The atomic checkpoint records its sequence and last event sequence. Startup compares
+checkpoint balance, fees, realized PnL, trade count and open-position identity with the current-run
+ledger before Nautilus is allowed to accept entries. Decimal tolerance is 0.00000001 USDT.
+
+An ordinary restart is recovery of the same run. A fresh 300 USDT experiment is a separate explicit
+operation and may not be used to hide a recovery failure. Legacy rows remain preserved and
+unattributed.
+
+## Quote Failure Scope
+
+Raw quotes must satisfy `0 < bid < ask`. Adverse slippage is applied with Decimal arithmetic and then
+quantized outward to the Gate contract tick. A one-tick minimum spread is allowed only after raw quote
+validation. A remaining symbol error is `QUARANTINED`; other valid symbols continue to monitor and may
+compete for the one execution slot.

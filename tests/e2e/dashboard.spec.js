@@ -6,6 +6,11 @@ test("paper dashboard is truthful and controls fail closed", async ({ page }) =>
     venue: "GATE",
     trading_state: "HALTED",
     engine: { status: "SIMULATION_READY", nautilus_version: "test", risk_engine_enabled: true },
+    accounting: { state: "VALID", reason: null, checkpoint_sequence: 4, last_event_sequence: 12, tolerance_usdt: "0.00000001" },
+    risk: { state: "OK", risk_day_utc: "2026-08-27", day_start_equity_usdt: "300" },
+    execution_model: { state: "PAPER_SIM", queue_model: "NOT_MODELED" },
+    run: { run_id: "11111111-1111-4111-8111-111111111111", session_id: "22222222-2222-4222-8222-222222222222", git_commit: "abcdef0123456789", config_hash: "1234567890abcdef", event_schema_version: 3 },
+    storage: { free_disk_bytes: 20000000000, free_disk_percent: 50, safe: true },
     data: { status: "LIVE", source: "GATE_PUBLIC_REST", latency_ms: 18, age_seconds: 0.4, last_event_utc: "2026-08-27T01:00:00Z", error: null },
     portfolio: { equity_usdt: 300, daily_pnl_usdt: 0, drawdown_pct: 0, trades_today: 0, open_positions: 0, fees_usdt: 0, slippage_usdt: 0 },
     open_trade: null,
@@ -44,6 +49,8 @@ test("paper dashboard is truthful and controls fail closed", async ({ page }) =>
   await expect(page.getByRole("button", { name: /live/i })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "FLATTEN PAPER POSITIONS" })).toBeDisabled();
   await expect(page.locator("#data-status")).toHaveText("DATA LIVE", { timeout: 20_000 });
+  await expect(page.locator("#accounting-state")).toHaveText("ACCOUNTING VALID");
+  await expect(page.locator("#run-session")).toHaveText("11111111 / 22222222");
   await expect(page.locator("#market-rows tr")).toHaveCount(2, { timeout: 20_000 });
   await expect(page.locator("#open-trade-ticker")).toBeHidden();
   await expect(page.locator("#trade-rows tr")).toHaveCount(1);
@@ -88,6 +95,11 @@ test("TradingView card isolates states, updates, and stays responsive", async ({
     venue: "GATE",
     trading_state: "ACTIVE",
     engine: { status: "SIMULATION_READY", nautilus_version: "test", risk_engine_enabled: true },
+    accounting: { state: "VALID", reason: null, checkpoint_sequence: 1, last_event_sequence: 0, tolerance_usdt: "0.00000001" },
+    risk: { state: "OK", risk_day_utc: "2026-08-27", day_start_equity_usdt: "300" },
+    execution_model: { state: "PAPER_SIM", queue_model: "NOT_MODELED" },
+    run: { run_id: "33333333-3333-4333-8333-333333333333", session_id: "44444444-4444-4444-8444-444444444444", git_commit: "abcdef0123456789", config_hash: "1234567890abcdef", event_schema_version: 3 },
+    storage: { free_disk_bytes: 20000000000, free_disk_percent: 50, safe: true },
     data: { status: "LIVE", source: "GATE_PUBLIC_REST", latency_ms: 18, age_seconds: 0.4, last_event_utc: "2026-08-27T01:00:00Z", error: null },
     portfolio: { equity_usdt: 300, daily_pnl_usdt: 0, drawdown_pct: 0, trades_today: 0, open_positions: 0, fees_usdt: 0, slippage_usdt: 0 },
     open_trade: null,
@@ -141,4 +153,39 @@ test("TradingView card isolates states, updates, and stays responsive", async ({
   await page.screenshot({ path: "test-results/tradingview-mobile.png", fullPage: true });
   expect(consoleErrors).toEqual([]);
   expect(apiErrors).toEqual([]);
+});
+
+test("accounting failure is prominent, disables resume, and symbol quarantine stays local", async ({ page }) => {
+  const state = {
+    mode: "PAPER",
+    venue: "GATE",
+    trading_state: "HALTED",
+    engine: { status: "SIMULATION_READY", nautilus_version: "test", risk_engine_enabled: true },
+    accounting: { state: "INVALID", reason: "checkpoint/ledger equity mismatch", checkpoint_sequence: 7, last_event_sequence: 13, tolerance_usdt: "0.00000001" },
+    risk: { state: "STATE_INVALID", risk_day_utc: "2026-08-27", day_start_equity_usdt: "300" },
+    execution_model: { state: "PAPER_SIM", queue_model: "NOT_MODELED" },
+    run: { run_id: "55555555-5555-4555-8555-555555555555", session_id: "66666666-6666-4666-8666-666666666666", git_commit: "abcdef0123456789", config_hash: "1234567890abcdef", event_schema_version: 3 },
+    storage: { free_disk_bytes: 20000000000, free_disk_percent: 50, safe: true },
+    data: { status: "LIVE", source: "GATE_PUBLIC_REST", latency_ms: 20, age_seconds: 0.2, last_event_utc: "2026-08-27T01:00:00Z", error: null },
+    portfolio: { equity_usdt: 292.99226546, daily_pnl_usdt: -7.00773454, drawdown_pct: 2.34, trades_today: 51, open_positions: 0, fees_usdt: 1.54, slippage_usdt: 0.1 },
+    open_trade: null,
+    trade_history: [],
+    orders: 0,
+    strategy: { name: "REST Momentum", symbol: "BTC_USDT", status: "STATE_INVALID", armed: false, monitored_symbols: 2, confidence: 0, expected_gross_bps: 0, expected_cost_bps: 0, expected_net_bps: 0, last_signal: null },
+    tradingview: { enabled: false, status: "DISABLED", advisory_only: true, execution_influence: "NONE" },
+    markets: [
+      { symbol: "LOW_USDT", last: 0.004, change_pct: 1, bid: 0.004, ask: 0.0041, spread_bps: 2, volume_quote: 10000000, funding_rate: 0, screen_score: 50, selected: true, rejection: null, signal_confidence: 0, signal_status: "QUARANTINED", quarantine_reason: "raw quote crossed" },
+      { symbol: "BTC_USDT", last: 78000, change_pct: 1, bid: 77999, ask: 78001, spread_bps: 0.25, volume_quote: 100000000, funding_rate: 0, screen_score: 70, selected: true, rejection: null, signal_confidence: 0.5, signal_status: "WAITING_EDGE", quarantine_reason: null },
+    ],
+    active_symbols: 2,
+    alerts: ["Persistent paper state is invalid."],
+    controls: { pause_allowed: false, resume_allowed: false, flatten_allowed: false },
+  };
+  await page.route("**/api/state", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify(state) }));
+  await page.goto("/");
+  await expect(page.locator("#accounting-state")).toHaveText("ACCOUNTING INVALID");
+  await expect(page.locator("#accounting-detail")).toContainText("equity mismatch");
+  await expect(page.getByRole("button", { name: "RESUME PAPER" })).toBeDisabled();
+  await expect(page.locator("#market-rows")).toContainText("QUARANTINED");
+  await expect(page.locator("#market-rows")).toContainText("WAITING EDGE");
 });

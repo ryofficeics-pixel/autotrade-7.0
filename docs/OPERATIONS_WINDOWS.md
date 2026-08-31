@@ -72,6 +72,22 @@ call the loopback PAPER resume endpoint only when the backend explicitly returns
 risk halts never expose that permission and remain blocked. Use `health_check.bat --once` to test it
 interactively.
 
+The watchdog also requires `accounting.state=VALID`, checks disk headroom, and rotates its own log at
+5 MB to timestamped archives. It cannot convert a legacy or mismatched checkpoint into a new run.
+
+Use `stop_bot.bat` for graceful shutdown. It calls the loopback-only shutdown endpoint, first pauses
+new entries, lets the server close the paper engine and pollers, and never force-terminates a process.
+
+To deliberately begin a new 300 USDT experiment, first run `stop_bot.bat`, then:
+
+```bat
+.venv\Scripts\python.exe -m autotrade new-paper-run --config config\paper.toml --confirm-new-run
+```
+
+This is not recovery. It copies any legacy checkpoint/ledger into a timestamped archive, creates new
+run metadata and an empty v3 ledger, then creates a reconciled v3 checkpoint. Start the dashboard only
+afterward. Never use this command to conceal a mismatch in an active experiment.
+
 ## Logs
 
 Separate:

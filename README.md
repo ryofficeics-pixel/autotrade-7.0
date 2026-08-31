@@ -81,6 +81,7 @@ setup_tradingview.bat
 check.bat
 start_bot.bat
 start_dashboard.bat
+stop_bot.bat
 install_autostart.bat
 capture_market_data.bat 3600
 ```
@@ -103,6 +104,15 @@ Playwright runtime.
 dashboard only when the health endpoint is unavailable, waits up to 30 seconds for health, starts the
 local 15-minute watchdog, and then opens `http://127.0.0.1:8767/` in the default browser. Run
 `autostart_dashboard.bat` directly to use the same behavior immediately.
+
+Paper recovery never resets a checkpoint to the configured balance. Schema-v3 runs reconcile their
+checkpoint, current-run event ledger and Nautilus opening balance before Resume is allowed. Existing
+legacy evidence remains visible but blocked as `STATE_INVALID`. After stopping the dashboard, an
+operator may explicitly archive the old evidence and prepare a separate experiment with:
+
+```bat
+.venv\Scripts\python.exe -m autotrade new-paper-run --config config\paper.toml --confirm-new-run
+```
 
 `capture_market_data.bat` runs an isolated public-data research capture for the requested number of
 seconds (one hour by default) under `data/gate-captures`. It does not feed the paper trader. Verify a

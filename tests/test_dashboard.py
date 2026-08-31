@@ -34,6 +34,7 @@ class DashboardTests(unittest.TestCase):
     def paper() -> object:
         class FakePaper:
             risk_halted = False
+            accounting_state = "VALID"
 
             def process(self, markets: object, *, entry_enabled: bool) -> None:
                 self.entry_enabled = entry_enabled
@@ -43,6 +44,9 @@ class DashboardTests(unittest.TestCase):
 
             def flatten(self) -> bool:
                 return False
+
+            def authorize_resume(self) -> bool:
+                return self.accounting_state == "VALID" and not self.risk_halted
 
             def close(self) -> None:
                 return None
@@ -72,6 +76,14 @@ class DashboardTests(unittest.TestCase):
                     positions=0,
                     risk_halted=self.risk_halted,
                     alerts=[],
+                    diagnostics={
+                        "accounting": {"state": self.accounting_state, "reason": None},
+                        "risk": {"state": "OK"},
+                        "execution_model": {"state": "PAPER_SIM"},
+                        "run": {},
+                        "storage": {"safe": True},
+                        "symbols": {"quarantined": {}},
+                    },
                 )
 
         return FakePaper()
@@ -249,6 +261,23 @@ class DashboardTests(unittest.TestCase):
         paused = state.snapshot(monotonic_now=100)
         self.assertTrue(paused["controls"]["resume_allowed"])  # type: ignore[index]
         self.assertFalse(paused["controls"]["auto_resume_allowed"])  # type: ignore[index]
+
+    def test_invalid_accounting_blocks_manual_and_watchdog_resume(self) -> None:
+        settings = self.settings()
+        report = RuntimeReport("PAPER", "test", "TESTER-001", "GATE", "300", "1", True, True)
+        paper = self.paper()
+        paper.accounting_state = "INVALID"  # type: ignore[attr-defined]
+        state = DashboardState(
+            report,
+            settings,
+            paper,  # type: ignore[arg-type]
+            self.tradingview(),  # type: ignore[arg-type]
+        )
+        state.apply_snapshot([{"selected": True}], 10, monotonic_now=100)
+        snapshot = state.snapshot(monotonic_now=100)
+        self.assertFalse(snapshot["controls"]["resume_allowed"])  # type: ignore[index]
+        self.assertFalse(snapshot["controls"]["auto_resume_allowed"])  # type: ignore[index]
+        self.assertFalse(state.resume(monotonic_now=100))
 
     def test_execution_fault_remains_halted_after_later_good_snapshot(self) -> None:
         settings = self.settings()

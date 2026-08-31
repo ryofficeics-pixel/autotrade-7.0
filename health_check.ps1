@@ -16,6 +16,10 @@ function Write-HealthLog {
     param([string]$Level, [string]$Message)
 
     New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
+    if ((Test-Path -LiteralPath $logPath) -and (Get-Item -LiteralPath $logPath).Length -ge 5000000) {
+        $archivePath = Join-Path $logDirectory ("health-check-{0}.log" -f [DateTime]::UtcNow.ToString("yyyyMMdd-HHmmss"))
+        Move-Item -LiteralPath $logPath -Destination $archivePath
+    }
     $line = "{0} [{1}] {2}" -f [DateTime]::UtcNow.ToString("o"), $Level, $Message
     Add-Content -LiteralPath $logPath -Value $line -Encoding UTF8
     Write-Host $line
@@ -57,6 +61,12 @@ function Invoke-HealthScan {
         $issues.Add("engine=$($state.engine.status)")
     }
     if ($state.engine.risk_engine_enabled -ne $true) { $issues.Add("risk-engine-disabled") }
+    if ($state.accounting.state -ne "VALID") {
+        $issues.Add("accounting=$($state.accounting.state):$($state.accounting.reason)")
+    }
+    if ($state.storage.safe -ne $true) {
+        $issues.Add("storage-free=$($state.storage.free_disk_bytes)")
+    }
     if ($state.data.status -ne "LIVE") {
         $issues.Add("data=$($state.data.status)")
     }

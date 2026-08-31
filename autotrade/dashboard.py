@@ -240,6 +240,9 @@ class DashboardState:
             fresh, _ = self._fresh(now)
             if not fresh or self._feed_error or self._execution_error:
                 return False
+            authorize_resume = getattr(self._paper, "authorize_resume", None)
+            if authorize_resume is not None and not authorize_resume():
+                return False
             self._manual_paused = False
             self._integrity_halted = False
             self._paper.set_entry_enabled(True)
@@ -262,6 +265,13 @@ class DashboardState:
             if not feed_healthy:
                 self._paper.set_entry_enabled(False)
             paper = self._paper.snapshot()
+            diagnostics = paper.diagnostics
+            accounting = diagnostics.get("accounting", {})
+            accounting_state = (
+                accounting.get("state", "VALID")
+                if isinstance(accounting, dict)
+                else "INVALID"
+            )
             if paper.risk_halted or self._execution_error:
                 self._integrity_halted = True
             trading_state = (
@@ -289,15 +299,28 @@ class DashboardState:
                 for candidate in candidates
                 if isinstance(candidate, dict) and "symbol" in candidate
             } if isinstance(candidates, list) else {}
+            symbol_diagnostics = diagnostics.get("symbols", {})
+            quarantined = (
+                symbol_diagnostics.get("quarantined", {})
+                if isinstance(symbol_diagnostics, dict)
+                else {}
+            )
             markets = [
                 {
                     **market,
                     "signal_confidence": candidate_map.get(
                         str(market.get("symbol")), {}
                     ).get("confidence", 0.0),
-                    "signal_status": candidate_map.get(
-                        str(market.get("symbol")), {}
-                    ).get("status", "NOT_MONITORED"),
+                    "signal_status": (
+                        "QUARANTINED"
+                        if str(market.get("symbol")) in quarantined
+                        else candidate_map.get(str(market.get("symbol")), {}).get(
+                            "status", "NOT_MONITORED"
+                        )
+                    ),
+                    "quarantine_reason": quarantined.get(str(market.get("symbol")))
+                    if isinstance(quarantined, dict)
+                    else None,
                 }
                 for market in self._markets
             ]
@@ -336,8 +359,17 @@ class DashboardState:
                 and not self._feed_error
                 and not self._execution_error
                 and not paper.risk_halted
+                and accounting_state == "VALID"
                 and trading_state != "ACTIVE"
             )
+
+            storage = diagnostics.get("storage", {})
+            if isinstance(storage, dict) and storage.get("safe") is False:
+                alerts.insert(
+                    0,
+                    "Storage is below the safe persistence threshold; entries are blocked.",
+                )
+                resume_allowed = False
 
             return {
                 "mode": self._report.mode,
@@ -361,6 +393,11 @@ class DashboardState:
                 "trade_history": paper.trade_history,
                 "orders": paper.orders,
                 "strategy": paper.strategy,
+                "accounting": accounting,
+                "risk": diagnostics.get("risk", {}),
+                "execution_model": diagnostics.get("execution_model", {}),
+                "run": diagnostics.get("run", {}),
+                "storage": storage,
                 "tradingview": tradingview,
                 "markets": markets,
                 "active_symbols": selected,
@@ -503,7 +540,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.server.state.pause()
         elif self.path == "/api/control/resume":
             if not self.server.state.resume():
-                self._json(HTTPStatus.CONFLICT, {"error": "fresh Gate state is required"})
+                self._json(
+                    HTTPStatus.CONFLICT,
+                    {"error": "fresh data and valid accounting/risk state are required"},
+                )
                 return
         elif self.path == "/api/control/restart-feed":
             self.server.poller.refresh()
@@ -511,6 +551,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
             if not self.server.state.flatten():
                 self._json(HTTPStatus.CONFLICT, {"error": "no paper position to flatten"})
                 return
+        elif self.path == "/api/control/shutdown":
+            self.server.state.pause()
+            self._json(HTTPStatus.OK, self.server.state.snapshot())
+            threading.Thread(target=self.server.shutdown, daemon=True).start()
+            return
         else:
             self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
             return

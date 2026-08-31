@@ -89,6 +89,15 @@ portfolio-wide execution slot, preserving one total open position. `PaperTrader`
 selection, order, position, risk and PnL state. HTTP handlers only read snapshots or request
 pause/resume/flatten controls; closing the browser does not stop it.
 
+Paper experiment evidence is segmented under `data/runs/<run_id>/`: immutable metadata and a schema-v3
+JSONL ledger. The recoverable checkpoint remains under `logs/paper-state.json` and is written by
+fsync plus atomic replacement. Startup reconciliation is the gate between persisted state and the
+Nautilus simulated account; ambiguity becomes `STATE_INVALID`, never a configured-balance reset.
+
+Quote construction is symbol-scoped. `PaperTrader` can quarantine one malformed contract while the
+shared account, risk engine, and remaining instrument strategies continue. Global halt remains reserved
+for account, risk, persistence, execution-state, or authoritative feed integrity failures.
+
 ### Dashboard/API
 
 Read/control plane only.

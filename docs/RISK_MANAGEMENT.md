@@ -54,11 +54,13 @@ Use explicit states:
 
 `HALTED` must require explicit recovery/restart logic.
 
-The paper checkpoint persists the UTC risk day, start-of-day equity/trade count, all-time peak
-equity, halt state and halt reason. Legacy checkpoints are migrated from timestamped trade history;
-the daily-loss control must never use lifetime PnL. A daily-loss halt may roll into a new UTC day only
-at an explicit process restart. Other safety halts remain sticky until their failure is diagnosed and
-state integrity is proven.
+The v3 paper checkpoint persists the UTC risk day, start-of-day equity/trade count, all-time peak
+equity, halt state and halt reason. Legacy checkpoints remain readable but are `STATE_INVALID` because
+their incomplete event identities cannot prove reconciliation; they are never silently migrated or
+reset. Daily PnL is always current equity minus current risk-day start equity. `DAILY_LOSS` is sticky
+through ordinary restart. A UTC rollover changes it to `DAILY_LOSS_REVIEW`, which still requires a
+fresh-data manual resume. Rollover never overrides accounting, recovery, drawdown or persistence
+failures.
 
 ## Automatic Halt Conditions
 
@@ -85,6 +87,10 @@ new snapshot passes validation and freshness checks.
 
 Auto-resume trading after any other critical state failure is not allowed. Execution, persistence,
 risk-limit and invalid-state failures remain `HALTED` until explicit recovery proves state integrity.
+
+`accounting.state` must equal `VALID` before either manual or watchdog resume is permitted. A single
+invalid symbol quote is quarantined locally and does not become a portfolio halt; an account, risk,
+global data or persistence invariant remains portfolio-wide and fail-closed.
 
 A recovery flatten is allowed only against a quote received within the configured market-data stale
 limit. A later successful poll must not erase a previously recorded critical execution fault.

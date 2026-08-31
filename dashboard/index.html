@@ -43,6 +43,11 @@
       </div>
     </section>
 
+    <section id="accounting-banner" class="integrity-banner checking" aria-live="assertive">
+      <strong id="accounting-state">ACCOUNTING CHECKING</strong>
+      <span id="accounting-detail">Entries remain blocked until checkpoint, engine, and ledger reconcile.</span>
+    </section>
+
     <section class="metrics" aria-label="Portfolio metrics">
       <article><span>Equity</span><strong id="equity">—</strong><small>SIMULATED USDT</small></article>
       <article><span>Today PnL</span><strong id="pnl">—</strong><small>AFTER COSTS</small></article>
@@ -69,11 +74,18 @@
         <header><div><p class="eyebrow">FAIL-CLOSED STATUS</p><h2>System Health</h2></div></header>
         <dl>
           <div><dt>Execution</dt><dd>SIMULATION ONLY</dd></div>
+          <div><dt>Accounting</dt><dd id="accounting-health">CHECKING</dd></div>
           <div><dt>Risk engine</dt><dd id="risk-health">CHECKING</dd></div>
+          <div><dt>Risk state</dt><dd id="risk-state">CHECKING</dd></div>
+          <div><dt>Execution model</dt><dd id="execution-model">PAPER SIM</dd></div>
           <div><dt>Market source</dt><dd id="data-source">—</dd></div>
           <div><dt>Data age</dt><dd id="data-age">—</dd></div>
           <div><dt>Last event</dt><dd id="last-event">—</dd></div>
           <div><dt>Orders / positions</dt><dd id="orders-positions">0 / 0</dd></div>
+          <div><dt>Run / session</dt><dd id="run-session">—</dd></div>
+          <div><dt>Build / config</dt><dd id="build-config">—</dd></div>
+          <div><dt>Checkpoint / event</dt><dd id="checkpoint-event">—</dd></div>
+          <div><dt>Free disk</dt><dd id="free-disk">—</dd></div>
         </dl>
         <div id="tradingview-card" class="tv-card" aria-label="TradingView secondary intelligence">
           <div class="tv-card-title">

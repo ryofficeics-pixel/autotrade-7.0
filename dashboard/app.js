@@ -46,6 +46,7 @@ function renderMarkets(markets) {
     const confidence = Number.isFinite(market.signal_confidence) ? market.signal_confidence : 0;
     cell(row, `${Math.round(confidence * 100)}%`);
     cell(row, (market.signal_status || "NOT_MONITORED").replaceAll("_", " "));
+    if (market.quarantine_reason) row.title = market.quarantine_reason;
     const stateCell = document.createElement("td");
     const chip = document.createElement("span");
     chip.className = `state-chip${market.selected ? "" : " rejected"}`;
@@ -107,6 +108,12 @@ function renderTradeHistory(trades = []) {
 }
 
 function render(state) {
+  const accounting = state.accounting || { state: "INVALID", reason: "Accounting diagnostics unavailable." };
+  const accountingValid = accounting.state === "VALID";
+  const accountingBanner = $("accounting-banner");
+  accountingBanner.className = `integrity-banner ${accountingValid ? "valid" : "invalid"}`;
+  text("accounting-state", `ACCOUNTING ${accounting.state || "INVALID"}`);
+  text("accounting-detail", accountingValid ? `Checkpoint ${accounting.checkpoint_sequence} and event ${accounting.last_event_sequence} reconcile at ${accounting.tolerance_usdt} USDT tolerance.` : accounting.reason || "Reconciliation failed; Resume is disabled.");
   const openTradeTicker = $("open-trade-ticker");
   const openTrade = state.open_trade;
   openTradeTicker.textContent = openTrade ? `OPEN PAPER TRADE · ${openTrade.symbol.replace("_", " / ")} · ${openTrade.side} · ENTRY $${price(openTrade.entry_price)} · NOW ${Number.isFinite(openTrade.current_price) ? `$${price(openTrade.current_price)}` : "—"}` : "OPEN PAPER TRADE —";
@@ -115,18 +122,32 @@ function render(state) {
   status($("data-status"), `DATA ${state.data.status}`, state.data.status === "LIVE" ? "good" : "bad");
   text("latency", state.data.latency_ms === null ? "— ms" : `${state.data.latency_ms} ms`);
   text("trading-state", state.trading_state);
-  text("state-detail", state.trading_state === "ACTIVE" ? "Paper strategy and market screening are active." : "New paper entries are blocked.");
+  text("state-detail", state.trading_state === "ACTIVE" ? "Paper strategy and market screening are active." : accountingValid ? "New paper entries are blocked." : "New entries are blocked by accounting integrity.");
   text("equity", `$${money.format(state.portfolio.equity_usdt)}`);
   text("pnl", `$${money.format(state.portfolio.daily_pnl_usdt)}`);
   text("drawdown", `${state.portfolio.drawdown_pct.toFixed(2)}%`);
   text("trades", String(state.portfolio.trades_today));
   text("positions", String(state.portfolio.open_positions));
   text("active-symbols", String(state.active_symbols));
+  text("accounting-health", accounting.state || "INVALID");
   text("risk-health", state.engine.risk_engine_enabled ? "ACTIVE" : "FAILED");
+  text("risk-state", (state.risk?.state || "UNKNOWN").replaceAll("_", " "));
+  text("execution-model", `${state.execution_model?.state || "UNKNOWN"} · ${state.execution_model?.queue_model || "UNKNOWN"}`);
   text("data-source", state.data.source);
   text("data-age", state.data.age_seconds === null ? "NO DATA" : `${state.data.age_seconds.toFixed(1)} s`);
   text("last-event", state.data.last_event_utc ? new Date(state.data.last_event_utc).toLocaleTimeString() : "—");
   text("orders-positions", `${state.orders} / ${state.portfolio.open_positions}`);
+  const runId = state.run?.run_id || "—";
+  const sessionId = state.run?.session_id || "—";
+  text("run-session", `${runId.slice(0, 8)} / ${sessionId.slice(0, 8)}`);
+  $("run-session").title = `${runId} / ${sessionId}`;
+  const gitCommit = state.run?.git_commit || "UNKNOWN";
+  const configHash = state.run?.config_hash || "UNKNOWN";
+  text("build-config", `${gitCommit.slice(0, 8)} / ${configHash.slice(0, 8)}`);
+  $("build-config").title = `${gitCommit} / ${configHash}`;
+  text("checkpoint-event", `${accounting.checkpoint_sequence ?? "—"} / ${accounting.last_event_sequence ?? "—"}`);
+  const freeBytes = state.storage?.free_disk_bytes;
+  text("free-disk", Number.isFinite(freeBytes) ? `${(freeBytes / 1_000_000_000).toFixed(1)} GB · ${state.storage.free_disk_percent.toFixed(1)}%` : "—");
   text("strategy-status", state.strategy.status.replaceAll("_", " "));
   text("strategy-detail", `${state.strategy.monitored_symbols || 0} pairs monitored · 1 execution slot · leader ${state.strategy.symbol.replace("_", " / ")} · confidence ${Math.round((state.strategy.confidence || 0) * 100)}% · net ${signed(state.strategy.expected_net_bps, 1)} bp`);
   text("strategy-badge", state.strategy.armed ? "ARMED" : "NOT ARMED");
@@ -154,6 +175,9 @@ function disconnected() {
   status($("data-status"), "DATA UNKNOWN", "bad");
   text("trading-state", "UNKNOWN");
   text("state-detail", "Backend state unavailable. Controls are disabled.");
+  $("accounting-banner").className = "integrity-banner invalid";
+  text("accounting-state", "ACCOUNTING UNKNOWN");
+  text("accounting-detail", "Backend unavailable; accounting cannot be verified and Resume is disabled.");
   $("pause-button").disabled = true;
   $("resume-button").disabled = true;
   $("flatten-button").disabled = true;
