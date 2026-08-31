@@ -20,6 +20,7 @@ from autotrade.runtime import RuntimeReport, run_paper_smoke
 from autotrade.tradingview import TradingViewMonitor, build_tradingview_monitor
 
 GATE_TICKERS_URL = "https://api.gateio.ws/api/v4/futures/usdt/tickers"
+GATE_CONTRACTS_URL = "https://api.gateio.ws/api/v4/futures/usdt/contracts"
 MAX_RESPONSE_BYTES = 2_000_000
 STATIC_DIR = Path(__file__).resolve().parents[1] / "dashboard"
 
@@ -36,6 +37,7 @@ def rank_tickers(
     payload: object,
     settings: Settings,
     required_symbols: tuple[str, ...] = (),
+    price_increments: dict[str, str] | None = None,
 ) -> list[dict[str, object]]:
     if not isinstance(payload, list):
         raise ValueError("Gate tickers response is not a list")
@@ -46,6 +48,7 @@ def rank_tickers(
         if not isinstance(item, dict):
             continue
         contract = str(item.get("contract", ""))
+        price_increment = price_increments.get(contract) if price_increments is not None else None
         last = _decimal(item.get("last"))
         bid = _decimal(item.get("highest_bid"))
         ask = _decimal(item.get("lowest_ask"))
@@ -63,6 +66,7 @@ def rank_tickers(
             or min(last, bid, ask) <= 0
             or ask < bid
             or volume < 0
+            or (price_increments is not None and price_increment is None)
         ):
             continue
 
@@ -93,6 +97,7 @@ def rank_tickers(
             "spread_bps": round(float(spread_bps), 3),
             "volume_quote": float(volume),
             "funding_rate": float(funding),
+            "price_increment": price_increment,
             "screen_score": round(score, 1),
             "selected": rejection is None,
             "rejection": rejection,
@@ -119,8 +124,29 @@ def rank_tickers(
 
 
 def fetch_gate_tickers() -> object:
+    return _fetch_gate_json(GATE_TICKERS_URL)
+
+
+def fetch_gate_price_increments() -> dict[str, str]:
+    payload = _fetch_gate_json(GATE_CONTRACTS_URL)
+    if not isinstance(payload, list):
+        raise RuntimeError("Gate contracts response is not a list")
+    increments: dict[str, str] = {}
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        contract = str(item.get("name", ""))
+        increment = _decimal(item.get("order_price_round"))
+        if contract.endswith("_USDT") and increment is not None and increment > 0:
+            increments[contract] = format(increment, "f")
+    if not increments:
+        raise RuntimeError("Gate contract price metadata is empty")
+    return increments
+
+
+def _fetch_gate_json(url: str) -> object:
     request = Request(
-        GATE_TICKERS_URL,
+        url,
         headers={"Accept": "application/json", "User-Agent": "Autotrade-Paper/0.1"},
     )
     with urlopen(request, timeout=10) as response:
@@ -353,6 +379,7 @@ class GatePoller:
         self._state = state
         self._settings = settings
         self._logger = logger
+        self._price_increments: dict[str, str] | None = None
         self._stop = threading.Event()
         self._wake = threading.Event()
         self._thread = threading.Thread(target=self._run, name="gate-public-feed", daemon=True)
@@ -372,10 +399,13 @@ class GatePoller:
         while not self._stop.is_set():
             started = time.monotonic()
             try:
+                if self._price_increments is None:
+                    self._price_increments = fetch_gate_price_increments()
                 markets = rank_tickers(
                     fetch_gate_tickers(),
                     self._settings,
                     self._state.monitored_symbols,
+                    self._price_increments,
                 )
                 if not any(bool(market["selected"]) for market in markets):
                     raise RuntimeError("no Gate contracts passed the configured filters")

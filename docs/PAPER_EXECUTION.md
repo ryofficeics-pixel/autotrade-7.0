@@ -17,6 +17,11 @@ to `logs/paper-events.jsonl`. New events carry a UTC observation timestamp; comp
 carry open/close prices, quantity, side, net realized PnL, PnL percentage, combined fees and exit reason
 for the dashboard's rolling 48-hour audit view.
 
+Instrument price increments come from Gate's public futures contract metadata and are required before
+the paper engine initializes a symbol. This prevents low-priced contracts from becoming falsely
+crossed when a first REST quote has fewer displayed decimals. Before Nautilus creates its account, the
+dashboard balance fallback uses the persisted paper balance rather than the configured starting value.
+
 When Nautilus splits a simulated market order across multiple fills, the audit record aggregates the
 full entry and exit quantities, quantity-weighted prices and all fill fees before calculating the
 dashboard PnL percentage.
@@ -29,6 +34,9 @@ Checkpoint schema version 2 also stores the UTC risk window, day-start equity/tr
 all-time peak, risk halt and halt reason. Writes reject non-finite state, flush and `fsync` before an
 atomic replace. Daily PnL and trade count therefore survive restart without being confused with
 lifetime performance.
+
+An automatic daily-loss or drawdown close is journaled as `RISK_FLATTEN`; only a user control request
+is journaled as `MANUAL_FLATTEN`.
 
 Partial fills, measured acknowledgement/cancel latency, funding debits and queue-aware maker fills
 remain pending L2/trade capture. Until those exist, results are research evidence only and must not be

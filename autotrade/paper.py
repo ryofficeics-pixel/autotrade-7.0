@@ -77,7 +77,7 @@ class RestMomentumStrategy(Strategy):
         self._exit_reason: str | None = None
         self._last_exit_ts = 0
         self._pending_order = False
-        self._flatten_requested = False
+        self._flatten_reason: str | None = None
         self._candidate_side: OrderSide | None = None
         self._regime_move_bps = 0.0
         self._prior_regime_move_bps = 0.0
@@ -96,8 +96,8 @@ class RestMomentumStrategy(Strategy):
         self._candidate_side = None
 
         if self._entry_price is not None and not self._pending_order:
-            if self._flatten_requested:
-                self._close("MANUAL_FLATTEN")
+            if self._flatten_reason is not None:
+                self._close(self._flatten_reason)
                 return
             direction = 1 if self._position_side == PositionSide.LONG else -1
             move_bps = (mid / self._entry_price - 1) * 10_000 * direction
@@ -280,7 +280,7 @@ class RestMomentumStrategy(Strategy):
         self._position_side = None
         self._exit_reason = None
         self._pending_order = False
-        self._flatten_requested = False
+        self._flatten_reason = None
         self.entry_candidate = False
         self.confidence = 0.0
         self._candidate_side = None
@@ -294,10 +294,10 @@ class RestMomentumStrategy(Strategy):
     def on_stop(self) -> None:
         self.unsubscribe_quote_ticks(self.config.instrument_id)
 
-    def request_flatten(self) -> bool:
+    def request_flatten(self, reason: str = "MANUAL_FLATTEN") -> bool:
         if self._entry_price is None:
             return False
-        self._flatten_requested = True
+        self._flatten_reason = reason
         return True
 
     def drain_events(self) -> list[dict[str, object]]:
@@ -480,7 +480,7 @@ class PaperTrader:
         balance = (
             balance_money.as_decimal()
             if balance_money
-            else self._settings.starting_balance_usdt
+            else self._initial_balance
         )
         positions = self._engine.cache.positions_open()
         unrealized = Decimal(0)
@@ -598,14 +598,18 @@ class PaperTrader:
             starting_balances=[Money(self._initial_balance, usdt)],
             default_leverage=self._settings.leverage,
         )
-
         initialized: list[str] = []
         for market in markets:
             raw_symbol = str(market["symbol"])
             if raw_symbol in self._strategies:
                 continue
             base = Currency.from_str(raw_symbol.removesuffix("_USDT"))
-            precision = max(4, min(8, _decimal_places(market["ask"])))
+            price_increment = _state_decimal(
+                market.get("price_increment"), f"{raw_symbol}.price_increment"
+            )
+            precision = _decimal_places(price_increment)
+            if price_increment <= 0 or precision > 16:
+                raise RuntimeError(f"invalid Gate price increment for {raw_symbol}")
             timestamp = time_ns()
             instrument_id = InstrumentId(Symbol(f"{raw_symbol}-PERP"), venue)
             instrument = CryptoPerpetual(
@@ -617,7 +621,7 @@ class PaperTrader:
                 is_inverse=False,
                 price_precision=precision,
                 size_precision=6,
-                price_increment=Price.from_str(str(Decimal(1).scaleb(-precision))),
+                price_increment=Price.from_str(format(price_increment, "f")),
                 size_increment=Quantity.from_str("0.000001"),
                 ts_event=timestamp,
                 ts_init=timestamp,
@@ -733,7 +737,7 @@ class PaperTrader:
             for strategy in self._strategies.values():
                 strategy.entry_enabled = False
                 if strategy.has_position:
-                    strategy.request_flatten()
+                    strategy.request_flatten("RISK_FLATTEN")
 
     def _inactive_snapshot(self, *, status: str, positions: int, alert: str) -> PaperSnapshot:
         alerts = [alert]

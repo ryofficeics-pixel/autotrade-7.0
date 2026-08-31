@@ -88,6 +88,8 @@ risk-limit and invalid-state failures remain `HALTED` until explicit recovery pr
 
 A recovery flatten is allowed only against a quote received within the configured market-data stale
 limit. A later successful poll must not erase a previously recorded critical execution fault.
+Risk-triggered position closures use the explicit `RISK_FLATTEN` audit reason and remain halted after
+the close; they are not reported as manual user actions.
 
 ## Nautilus Risk Engine
 

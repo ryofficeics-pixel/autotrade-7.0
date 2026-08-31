@@ -1,14 +1,20 @@
 from __future__ import annotations
 
+import json
 import os
 import unittest
 from dataclasses import replace
 from decimal import Decimal
 from email.message import Message
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from autotrade.config import Settings, load_settings
-from autotrade.dashboard import DashboardState, rank_tickers, request_is_local
+from autotrade.dashboard import (
+    DashboardState,
+    fetch_gate_price_increments,
+    rank_tickers,
+    request_is_local,
+)
 from autotrade.paper import PaperSnapshot
 from autotrade.runtime import RuntimeReport
 
@@ -132,6 +138,34 @@ class DashboardTests(unittest.TestCase):
         )
         self.assertTrue(markets[0]["selected"])
         self.assertEqual(markets[2]["rejection"], "WIDE SPREAD")
+
+    def test_gate_contract_metadata_supplies_exact_price_increment(self) -> None:
+        response = MagicMock()
+        response.status = 200
+        response.read.return_value = json.dumps(
+            [{"name": "PUMP_USDT", "order_price_round": "0.000001"}]
+        ).encode()
+        response.__enter__.return_value = response
+        with patch("autotrade.dashboard.urlopen", return_value=response):
+            increments = fetch_gate_price_increments()
+        self.assertEqual(increments, {"PUMP_USDT": "0.000001"})
+        settings = replace(self.settings(), minimum_quote_volume=Decimal(0))
+        markets = rank_tickers(
+            [
+                {
+                    "contract": "PUMP_USDT",
+                    "last": "0.004394",
+                    "highest_bid": "0.004392",
+                    "lowest_ask": "0.004393",
+                    "change_percentage": "1",
+                    "volume_24h_quote": "10000000",
+                    "funding_rate": "0",
+                }
+            ],
+            settings,
+            price_increments=increments,
+        )
+        self.assertEqual(markets[0]["price_increment"], "0.000001")
 
     def test_market_ranking_keeps_the_initialized_monitoring_universe(self) -> None:
         settings = replace(

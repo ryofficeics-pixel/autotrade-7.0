@@ -30,6 +30,7 @@ def market(price: float) -> list[dict[str, object]]:
             "last": price,
             "bid": price - 0.01,
             "ask": price + 0.01,
+            "price_increment": "0.0001",
             "selected": True,
         }
     ]
@@ -42,6 +43,7 @@ def tournament_market(eth_price: float, btc_price: float) -> list[dict[str, obje
             "last": price,
             "bid": price - 0.01,
             "ask": price + 0.01,
+            "price_increment": "0.0001",
             "selected": True,
         }
         for symbol, price in (("ETH_USDT", eth_price), ("BTC_USDT", btc_price))
@@ -55,6 +57,7 @@ def low_price_market(price: float) -> list[dict[str, object]]:
             "last": price,
             "bid": price - 0.00001,
             "ask": price + 0.00001,
+            "price_increment": "0.000001",
             "selected": True,
         }
     ]
@@ -69,19 +72,21 @@ class PaperTraderTests(unittest.TestCase):
             try:
                 first = [
                     {
-                        "symbol": "UNI_USDT",
-                        "last": 4.9,
-                        "bid": 4.89,
-                        "ask": 4.9,
+                        "symbol": "PUMP_USDT",
+                        "last": 0.0044,
+                        "bid": 0.0043,
+                        "ask": 0.0044,
+                        "price_increment": "0.000001",
                         "selected": True,
                     }
                 ]
                 narrow = [
                     {
-                        "symbol": "UNI_USDT",
-                        "last": 4.8965,
-                        "bid": 4.896,
-                        "ask": 4.897,
+                        "symbol": "PUMP_USDT",
+                        "last": 0.004394,
+                        "bid": 0.004392,
+                        "ask": 0.004393,
+                        "price_increment": "0.000001",
                         "selected": True,
                     }
                 ]
@@ -552,6 +557,70 @@ class PaperTraderTests(unittest.TestCase):
                 self.assertTrue(snapshot.risk_halted)
                 self.assertAlmostEqual(snapshot.portfolio["daily_pnl_usdt"], -7.0)
                 self.assertIn("DAILY_LOSS", snapshot.alerts[0])
+            finally:
+                trader.close()
+
+    def test_new_utc_day_restores_persisted_balance_without_resetting_equity(self) -> None:
+        report = RuntimeReport("PAPER", "test", "TESTER-001", "GATE", "300", "1", True, True)
+        yesterday = (datetime.now(UTC) - timedelta(days=1)).date().isoformat()
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, SAFE_ENV):
+            path = Path(directory)
+            (path / "paper-state.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": 2,
+                        "mode": "PAPER",
+                        "symbol": "MULTI",
+                        "balance_usdt": "292.99226546",
+                        "trades": 51,
+                        "fees_usdt": "1.5430654791597",
+                        "position": None,
+                        "risk_day_utc": yesterday,
+                        "day_start_equity_usdt": "299.0220726297597",
+                        "trades_at_day_start": 14,
+                        "peak_equity_usdt": "300",
+                        "risk_halted": True,
+                        "risk_halt_reason": "DAILY_LOSS",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            settings = replace(load_settings(), log_directory=path)
+            trader = PaperTrader(report, settings, logging.getLogger("test.paper.rollover"))
+            try:
+                trader.process(market(2500), entry_enabled=False)
+                snapshot = trader.snapshot()
+                self.assertFalse(snapshot.risk_halted)
+                self.assertAlmostEqual(snapshot.portfolio["equity_usdt"], 292.99226546)
+                self.assertAlmostEqual(snapshot.portfolio["daily_pnl_usdt"], 0.0)
+                self.assertEqual(snapshot.portfolio["trades_today"], 0)
+            finally:
+                trader.close()
+
+    def test_automatic_loss_halt_is_labeled_risk_flatten(self) -> None:
+        report = RuntimeReport("PAPER", "test", "TESTER-001", "GATE", "300", "1", True, True)
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, SAFE_ENV):
+            settings = replace(
+                load_settings(),
+                log_directory=Path(directory),
+                strategy_window=3,
+                strategy_persistence_ticks=2,
+                strategy_regime_window=6,
+                strategy_entry_threshold_bps=Decimal("10"),
+                strategy_minimum_net_edge_bps=Decimal("1"),
+                strategy_minimum_confidence=Decimal("0.10"),
+                strategy_slippage_bps=Decimal("0"),
+                strategy_daily_loss_usdt=Decimal("0.01"),
+            )
+            trader = PaperTrader(report, settings, logging.getLogger("test.paper.risk-flatten"))
+            try:
+                for price in (100.00, 100.05, 100.10, 100.15, 100.20, 100.35, 100.36):
+                    trader.process(market(price), entry_enabled=True)
+                trader.process(market(100.36), entry_enabled=False)
+                snapshot = trader.snapshot()
+                self.assertTrue(snapshot.risk_halted)
+                self.assertEqual(snapshot.positions, 0)
+                self.assertEqual(snapshot.trade_history[0]["reason"], "RISK_FLATTEN")
             finally:
                 trader.close()
 
