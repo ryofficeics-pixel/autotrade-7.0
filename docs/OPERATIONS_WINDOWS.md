@@ -78,6 +78,17 @@ The watchdog also requires `accounting.state=VALID`, checks disk headroom, and r
 Use `stop_bot.bat` for graceful shutdown. It calls the loopback-only shutdown endpoint, first pauses
 new entries, lets the server close the paper engine and pollers, and never force-terminates a process.
 
+For an unexpected halt, click `ANALYZE & AUTO-FIX` on the dashboard. No AI agent or API key is
+needed. The backend retries public quotes, reconciles the checkpoint against the full split-fill
+ledger, and resumes eligible startup pauses. The diagnosis shows completed checks and any remaining
+action and is also recorded in `logs/dashboard.log`. It never creates a replacement experiment.
+For `RECOVERY_REQUIRED`, use the separate `FLATTEN PAPER POSITIONS` button, then `RESUME PAPER`.
+Accounting corruption, risk limits, and uncertain execution stay blocked with a stated reason.
+If the backend is unreachable, use `start_bot.bat`; a button cannot repair a stopped backend.
+
+The Playwright test server uses `test-results/ui-runtime/logs`, with strategy execution and the
+TradingView sidecar disabled, so browser tests cannot write to the operating paper run.
+
 To deliberately begin a new 300 USDT experiment, first run `stop_bot.bat`, then:
 
 ```bat

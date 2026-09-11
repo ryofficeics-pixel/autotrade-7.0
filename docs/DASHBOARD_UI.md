@@ -169,6 +169,25 @@ Separate:
 
 Never combine them into one ambiguous button.
 
+`ANALYZE & AUTO-FIX` is available even while halted. It shows the detected cause, checks
+performed, repairs completed, and any remaining action. It retries the public feed, checks
+durable accounting, and safely resumes startup pauses. It preserves manual pauses and critical
+halts. Recovered open positions require the separate `FLATTEN PAPER POSITIONS` action followed
+by `RESUME PAPER`; risk limits, uncertain execution, and corrupt evidence are never bypassed.
+The result remains visible on refresh, controls stay disabled during a request, and failures
+are shown explicitly. An unreachable backend requires the existing local launcher/watchdog.
+
+The operating-state header shows halt timing without implying automatic recovery. A current
+`DAILY_LOSS` halt counts down to UTC rollover, labeled as manual-review eligibility rather than
+automatic resume. `DAILY_LOSS_REVIEW`, `MAX_DRAWDOWN`, and other critical halts show that no
+automatic lift exists and manual review is required.
+
+`START NEW PAPER RUN` is the in-app replacement for the `new-paper-run --confirm-new-run`
+command. It is available only when a reconciled PAPER account is flat, market data is fresh,
+storage is safe, and the current halt is `MAX_DRAWDOWN`. It requires explicit confirmation,
+archives the completed run, creates a new run identity and ledger, then starts that new PAPER
+experiment. It never clears or relabels the halted run and is not a LIVE control.
+
 ## Charts
 
 Keep charts purposeful:

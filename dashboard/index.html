@@ -34,11 +34,14 @@
         <p class="eyebrow">OPERATING STATE</p>
         <h1 id="trading-state">LOADING</h1>
         <p id="state-detail" class="muted">Waiting for authoritative backend state.</p>
+        <p id="halt-timer" class="halt-timer" aria-live="off" hidden></p>
       </div>
       <div class="controls" aria-label="Paper controls">
         <button id="pause-button" class="danger" disabled>PAUSE NEW ENTRIES</button>
         <button id="resume-button" disabled>RESUME PAPER</button>
-        <button id="flatten-button" disabled title="No paper positions exist">FLATTEN PAPER POSITIONS</button>
+        <button id="flatten-button" disabled title="Close a paper position using a fresh quote">FLATTEN PAPER POSITIONS</button>
+        <button id="analyze-button" class="repair" disabled>ANALYZE &amp; AUTO-FIX</button>
+        <button id="new-run-button" class="new-run" disabled title="Archive this halted run and create a new PAPER experiment">START NEW PAPER RUN</button>
         <button id="restart-button">RESTART DATA FEED</button>
       </div>
     </section>
@@ -46,6 +49,15 @@
     <section id="accounting-banner" class="integrity-banner checking" aria-live="assertive">
       <strong id="accounting-state">ACCOUNTING CHECKING</strong>
       <span id="accounting-detail">Entries remain blocked until checkpoint, engine, and ledger reconcile.</span>
+    </section>
+
+    <section id="recovery-panel" class="recovery-panel" aria-label="Built-in diagnosis" aria-live="polite">
+      <strong id="recovery-status">BUILT-IN DIAGNOSIS</strong>
+      <p id="recovery-detail">Analyze &amp; Auto-fix checks accounting, refreshes market data, and resumes when safe.</p>
+      <p id="recovery-trigger" class="muted" hidden></p>
+      <ul id="recovery-checks"></ul>
+      <p id="recovery-next">Recovered positions and risk halts show the action required here.</p>
+      <p id="control-feedback" role="alert" hidden></p>
     </section>
 
     <section class="metrics" aria-label="Portfolio metrics">

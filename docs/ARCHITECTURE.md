@@ -102,6 +102,17 @@ for account, risk, persistence, execution-state, or authoritative feed integrity
 
 Read/control plane only.
 
+`POST /api/control/analyze-repair` runs a bounded, deterministic health check in the
+backend. It serializes with the existing feed poller and paper state lock, refreshes public
+quotes, revalidates the durable checkpoint against every attributed fill, and resumes only
+when the existing safety gates pass. No AI service, shell command, dependency, or browser
+execution logic is involved. Concurrent repair requests are rejected; results are returned
+in `/api/state` and recorded in the dashboard log.
+
+Open-position reconciliation aggregates all entry fills, including fills after the first
+`position_opened` event. It verifies identity, quantity, weighted price, and entry fees;
+it never rewrites the ledger or resets the paper account. An incomplete exit remains unsafe.
+
 Allowed:
 - start/pause paper strategy;
 - display system health;

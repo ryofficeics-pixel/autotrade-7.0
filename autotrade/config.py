@@ -17,6 +17,30 @@ class ConfigError(ValueError):
 
 
 @dataclass(frozen=True)
+class EntryV3Settings:
+    enabled: bool
+    book_depth: int
+    feature_window_events: int
+    feature_window_ms: int
+    impulse_window_ms: int
+    impulse_min_bps: Decimal
+    pullback_min_ratio: Decimal
+    pullback_max_ratio: Decimal
+    reacceleration_bps: Decimal
+    flow_confirmation: Decimal
+    breakout_flow: Decimal
+    book_confirmation: Decimal
+    vwap_extension_bps: Decimal
+    maximum_spread_bps: Decimal
+    minimum_net_edge_bps: Decimal
+    continuation_fraction: Decimal
+    observed_latency_cap_ms: int
+    whipsaw_block_ms: int
+    maximum_reversals: int
+    minimum_events: int
+
+
+@dataclass(frozen=True)
 class Settings:
     mode: str
     live_trading_enabled: bool
@@ -52,6 +76,7 @@ class Settings:
     strategy_slippage_bps: Decimal
     strategy_daily_loss_usdt: Decimal
     strategy_max_drawdown_pct: Decimal
+    entry_v3: EntryV3Settings
     dashboard_host: str
     dashboard_port: int
     tradingview_enabled: bool
@@ -124,6 +149,14 @@ def load_settings(path: Path | str = DEFAULT_CONFIG_PATH) -> Settings:
     logging = _table(document, "logging")
     market_data = _table(document, "market_data")
     strategy = _table(document, "paper_strategy")
+    entry_v3 = _optional_table(strategy, "entry_v3")
+    impulse = _optional_table(entry_v3, "impulse")
+    pullback = _optional_table(entry_v3, "pullback")
+    flow = _optional_table(entry_v3, "flow")
+    book = _optional_table(entry_v3, "book")
+    exhaustion = _optional_table(entry_v3, "exhaustion")
+    edge = _optional_table(entry_v3, "edge")
+    whipsaw = _optional_table(entry_v3, "whipsaw")
     dashboard = _table(document, "dashboard")
     tradingview = _optional_table(document, "tradingview")
 
@@ -146,9 +179,7 @@ def load_settings(path: Path | str = DEFAULT_CONFIG_PATH) -> Settings:
     log_file_max_size = _integer(
         logging.get("max_file_size_bytes", 10_000_000), "max_file_size_bytes"
     )
-    log_file_max_backup_count = _integer(
-        logging.get("max_backup_count", 5), "max_backup_count"
-    )
+    log_file_max_backup_count = _integer(logging.get("max_backup_count", 5), "max_backup_count")
     market_poll_seconds = _integer(market_data.get("poll_seconds", 5), "poll_seconds")
     market_stale_after_seconds = _integer(
         market_data.get("stale_after_seconds", 15), "stale_after_seconds"
@@ -157,9 +188,7 @@ def load_settings(path: Path | str = DEFAULT_CONFIG_PATH) -> Settings:
     minimum_quote_volume = _decimal(
         market_data.get("minimum_quote_volume", "5000000"), "minimum_quote_volume"
     )
-    maximum_spread_bps = _decimal(
-        market_data.get("maximum_spread_bps", "12"), "maximum_spread_bps"
-    )
+    maximum_spread_bps = _decimal(market_data.get("maximum_spread_bps", "12"), "maximum_spread_bps")
     strategy_enabled = _boolean(strategy.get("enabled", False), "paper_strategy.enabled")
     strategy_symbol = str(strategy.get("symbol", "")).strip().upper()
     strategy_notional_usdt = _decimal(
@@ -205,16 +234,73 @@ def load_settings(path: Path | str = DEFAULT_CONFIG_PATH) -> Settings:
     strategy_max_drawdown_pct = _decimal(
         strategy.get("max_drawdown_pct", "3"), "paper_strategy.max_drawdown_pct"
     )
+    entry_v3_settings = EntryV3Settings(
+        enabled=_boolean(entry_v3.get("enabled", True), "paper_strategy.entry_v3.enabled"),
+        book_depth=_integer(book.get("depth", 5), "entry_v3.book.depth"),
+        feature_window_events=_integer(
+            entry_v3.get("feature_window_events", 256),
+            "entry_v3.feature_window_events",
+        ),
+        feature_window_ms=_integer(
+            entry_v3.get("feature_window_ms", 5000), "entry_v3.feature_window_ms"
+        ),
+        impulse_window_ms=_integer(impulse.get("window_ms", 1500), "entry_v3.impulse.window_ms"),
+        impulse_min_bps=_decimal(impulse.get("minimum_bps", "8"), "entry_v3.impulse.minimum_bps"),
+        pullback_min_ratio=_decimal(
+            pullback.get("minimum_ratio", "0.20"), "entry_v3.pullback.minimum_ratio"
+        ),
+        pullback_max_ratio=_decimal(
+            pullback.get("maximum_ratio", "0.60"), "entry_v3.pullback.maximum_ratio"
+        ),
+        reacceleration_bps=_decimal(
+            pullback.get("reacceleration_bps", "2"),
+            "entry_v3.pullback.reacceleration_bps",
+        ),
+        flow_confirmation=_decimal(flow.get("confirmation", "0.15"), "entry_v3.flow.confirmation"),
+        breakout_flow=_decimal(
+            flow.get("breakout_confirmation", "0.35"),
+            "entry_v3.flow.breakout_confirmation",
+        ),
+        book_confirmation=_decimal(book.get("confirmation", "0.05"), "entry_v3.book.confirmation"),
+        vwap_extension_bps=_decimal(
+            exhaustion.get("vwap_extension_bps", "15"),
+            "entry_v3.exhaustion.vwap_extension_bps",
+        ),
+        maximum_spread_bps=_decimal(
+            book.get("maximum_spread_bps", "8"), "entry_v3.book.maximum_spread_bps"
+        ),
+        minimum_net_edge_bps=_decimal(
+            edge.get("minimum_net_edge_bps", "5"),
+            "entry_v3.edge.minimum_net_edge_bps",
+        ),
+        continuation_fraction=_decimal(
+            edge.get("continuation_fraction", "0.35"),
+            "entry_v3.edge.continuation_fraction",
+        ),
+        observed_latency_cap_ms=_integer(
+            edge.get("observed_latency_cap_ms", 1000),
+            "entry_v3.edge.observed_latency_cap_ms",
+        ),
+        whipsaw_block_ms=_integer(whipsaw.get("block_ms", 30000), "entry_v3.whipsaw.block_ms"),
+        maximum_reversals=_integer(
+            whipsaw.get("maximum_reversals", 4), "entry_v3.whipsaw.maximum_reversals"
+        ),
+        minimum_events=_integer(entry_v3.get("minimum_events", 12), "entry_v3.minimum_events"),
+    )
     dashboard_host = str(dashboard.get("host", "127.0.0.1")).strip()
     dashboard_port = _integer(dashboard.get("port", 8765), "dashboard.port")
     tradingview_enabled = _boolean(
         os.getenv("TRADINGVIEW_ENABLED", tradingview.get("enabled", False)),
         "TRADINGVIEW_ENABLED",
     )
-    tradingview_confirmation_mode = os.getenv(
-        "TRADINGVIEW_CONFIRMATION_MODE",
-        str(tradingview.get("confirmation_mode", "borderline")),
-    ).strip().lower()
+    tradingview_confirmation_mode = (
+        os.getenv(
+            "TRADINGVIEW_CONFIRMATION_MODE",
+            str(tradingview.get("confirmation_mode", "borderline")),
+        )
+        .strip()
+        .lower()
+    )
     tradingview_weight = _decimal(
         os.getenv("TRADINGVIEW_WEIGHT", tradingview.get("weight", "0.20")),
         "TRADINGVIEW_WEIGHT",
@@ -239,9 +325,7 @@ def load_settings(path: Path | str = DEFAULT_CONFIG_PATH) -> Settings:
     tradingview_stale_after_seconds = _integer(
         tradingview.get("stale_after_seconds", 45), "tradingview.stale_after_seconds"
     )
-    tradingview_expected_timeframe = str(
-        tradingview.get("expected_timeframe", "5")
-    ).strip().upper()
+    tradingview_expected_timeframe = str(tradingview.get("expected_timeframe", "5")).strip().upper()
     tradingview_pine_enabled = _boolean(
         os.getenv("TRADINGVIEW_PINE_ENABLED", tradingview.get("pine_enabled", True)),
         "TRADINGVIEW_PINE_ENABLED",
@@ -327,6 +411,49 @@ def load_settings(path: Path | str = DEFAULT_CONFIG_PATH) -> Settings:
         )
     if strategy_max_drawdown_pct <= 0 or strategy_max_drawdown_pct > 5:
         raise ConfigError("paper_strategy.max_drawdown_pct must be positive and at most 5%")
+    if not 1 <= entry_v3_settings.book_depth <= 20:
+        raise ConfigError("entry_v3.book.depth must be between 1 and 20")
+    if not 32 <= entry_v3_settings.feature_window_events <= 4096:
+        raise ConfigError("entry_v3.feature_window_events must be between 32 and 4096")
+    if not 1000 <= entry_v3_settings.feature_window_ms <= 60000:
+        raise ConfigError("entry_v3.feature_window_ms must be between 1000 and 60000")
+    if not 100 <= entry_v3_settings.impulse_window_ms < entry_v3_settings.feature_window_ms:
+        raise ConfigError("entry_v3.impulse.window_ms must be shorter than the feature window")
+    if entry_v3_settings.impulse_min_bps <= 0:
+        raise ConfigError("entry_v3.impulse.minimum_bps must be positive")
+    if (
+        not Decimal("0")
+        < entry_v3_settings.pullback_min_ratio
+        < (entry_v3_settings.pullback_max_ratio)
+        < Decimal("1")
+    ):
+        raise ConfigError("entry_v3 pullback ratios must satisfy 0 < minimum < maximum < 1")
+    if entry_v3_settings.reacceleration_bps <= 0:
+        raise ConfigError("entry_v3.pullback.reacceleration_bps must be positive")
+    if not all(
+        Decimal("0") <= value <= Decimal("1")
+        for value in (
+            entry_v3_settings.flow_confirmation,
+            entry_v3_settings.breakout_flow,
+            entry_v3_settings.book_confirmation,
+            entry_v3_settings.continuation_fraction,
+        )
+    ):
+        raise ConfigError("entry_v3 normalized thresholds must be between 0 and 1")
+    if entry_v3_settings.breakout_flow < entry_v3_settings.flow_confirmation:
+        raise ConfigError("entry_v3 breakout flow must be at least the normal confirmation")
+    if entry_v3_settings.maximum_spread_bps <= 0:
+        raise ConfigError("entry_v3.book.maximum_spread_bps must be positive")
+    if entry_v3_settings.minimum_net_edge_bps < 5:
+        raise ConfigError("entry_v3.edge.minimum_net_edge_bps must be at least 5")
+    if not 1 <= entry_v3_settings.observed_latency_cap_ms <= 5000:
+        raise ConfigError("entry_v3.edge.observed_latency_cap_ms must be between 1 and 5000")
+    if not 1000 <= entry_v3_settings.whipsaw_block_ms <= 300000:
+        raise ConfigError("entry_v3.whipsaw.block_ms must be between 1000 and 300000")
+    if not 1 <= entry_v3_settings.maximum_reversals <= 20:
+        raise ConfigError("entry_v3.whipsaw.maximum_reversals must be between 1 and 20")
+    if not 4 <= entry_v3_settings.minimum_events <= entry_v3_settings.feature_window_events:
+        raise ConfigError("entry_v3.minimum_events is outside the feature window")
     if dashboard_host != "127.0.0.1":
         raise ConfigError("Phase 1 dashboard must bind to 127.0.0.1")
     if not 1024 <= dashboard_port <= 65535:
@@ -383,6 +510,7 @@ def load_settings(path: Path | str = DEFAULT_CONFIG_PATH) -> Settings:
         strategy_slippage_bps=strategy_slippage_bps,
         strategy_daily_loss_usdt=strategy_daily_loss_usdt,
         strategy_max_drawdown_pct=strategy_max_drawdown_pct,
+        entry_v3=entry_v3_settings,
         dashboard_host=dashboard_host,
         dashboard_port=dashboard_port,
         tradingview_enabled=tradingview_enabled,

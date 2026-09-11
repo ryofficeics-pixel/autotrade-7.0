@@ -50,6 +50,7 @@ test("paper dashboard is truthful and controls fail closed", async ({ page }) =>
   await expect(page.getByRole("button", { name: "FLATTEN PAPER POSITIONS" })).toBeDisabled();
   await expect(page.locator("#data-status")).toHaveText("DATA LIVE", { timeout: 20_000 });
   await expect(page.locator("#accounting-state")).toHaveText("ACCOUNTING VALID");
+  await expect(page.locator("#halt-timer")).toBeHidden();
   await expect(page.locator("#run-session")).toHaveText("11111111 / 22222222");
   await expect(page.locator("#market-rows tr")).toHaveCount(2, { timeout: 20_000 });
   await expect(page.locator("#open-trade-ticker")).toBeHidden();
@@ -87,6 +88,70 @@ test("backend loss is loud and disables controls", async ({ page }) => {
   await expect(page.locator("#trading-state")).toHaveText("UNKNOWN");
   await expect(page.getByRole("button", { name: "PAUSE NEW ENTRIES" })).toBeDisabled();
   await expect(page.getByRole("button", { name: "RESUME PAPER" })).toBeDisabled();
+});
+
+test("risk halt timing never promises automatic resume", async ({ page }) => {
+  const riskDay = new Date().toISOString().slice(0, 10);
+  const state = {
+    mode: "PAPER",
+    venue: "GATE",
+    trading_state: "HALTED",
+    engine: { status: "SIMULATION_READY", risk_engine_enabled: true },
+    accounting: { state: "VALID", checkpoint_sequence: 1, last_event_sequence: 1, tolerance_usdt: "0.00000001" },
+    risk: { state: "DAILY_LOSS", risk_day_utc: riskDay },
+    execution_model: { state: "PAPER_SIM", queue_model: "NOT_MODELED" },
+    run: {},
+    storage: {},
+    data: { status: "LIVE", source: "GATE_PUBLIC_REST", latency_ms: 10, age_seconds: 0.1, last_event_utc: new Date().toISOString() },
+    portfolio: { equity_usdt: 294, daily_pnl_usdt: -6, drawdown_pct: 2, trades_today: 3, open_positions: 0 },
+    open_trade: null,
+    trade_history: [],
+    orders: 0,
+    strategy: { symbol: "ETH_USDT", status: "PAUSED", armed: false, expected_net_bps: 0 },
+    tradingview: {},
+    markets: [],
+    active_symbols: 0,
+    alerts: ["Paper risk limit reached (DAILY_LOSS); new entries are halted."],
+    controls: { pause_allowed: false, resume_allowed: false, flatten_allowed: false },
+  };
+  await page.route("**/api/state", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify(state) }));
+  await page.goto("/");
+  await expect(page.locator("#halt-timer")).toContainText("MANUAL REVIEW ELIGIBLE IN");
+  await expect(page.locator("#halt-timer")).toContainText("NO AUTOMATIC RESUME");
+
+  state.risk.state = "DAILY_LOSS_REVIEW";
+  state.controls.resume_allowed = true;
+  await page.evaluate(() => refresh());
+  await expect(page.locator("#halt-timer")).toHaveText("NO AUTOMATIC LIFT · DAILY LOSS REVIEW · MANUAL REVIEW REQUIRED");
+  await expect(page.getByRole("button", { name: "RESUME PAPER" })).toBeEnabled();
+
+  state.risk.state = "MAX_DRAWDOWN";
+  state.controls.resume_allowed = false;
+  state.controls.new_paper_run_allowed = true;
+  state.alerts = ["Paper risk limit reached (MAX_DRAWDOWN); new entries are halted."];
+  await page.evaluate(() => refresh());
+  await expect(page.locator("#halt-timer")).toHaveText("NO COUNTDOWN · MAX DRAWDOWN DOES NOT EXPIRE · MANUAL REVIEW REQUIRED");
+  await expect(page.getByRole("button", { name: "RESUME PAPER" })).toBeDisabled();
+  const newRun = page.getByRole("button", { name: "START NEW PAPER RUN" });
+  await expect(newRun).toBeEnabled();
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.screenshot({ path: "test-results/max-drawdown-new-run-mobile.png", fullPage: true });
+  await page.route("**/api/control/new-paper-run", (route) => {
+    expect(route.request().postDataJSON()).toEqual({ confirm_new_run: true });
+    state.trading_state = "ACTIVE";
+    state.risk.state = "OK";
+    state.portfolio = { ...state.portfolio, equity_usdt: 300, daily_pnl_usdt: 0, drawdown_pct: 0, trades_today: 0 };
+    state.strategy.armed = true;
+    state.controls = { pause_allowed: true, resume_allowed: false, flatten_allowed: false, new_paper_run_allowed: false };
+    state.alerts = ["All screened pairs are monitored; one highest-confidence eligible pair may trade."];
+    return route.fulfill({ contentType: "application/json", body: JSON.stringify(state) });
+  });
+  page.once("dialog", (dialog) => dialog.accept());
+  await newRun.click();
+  await expect(page.locator("#trading-state")).toHaveText("ACTIVE");
+  await expect(newRun).toBeDisabled();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });
 
 test("TradingView card isolates states, updates, and stays responsive", async ({ page }) => {
@@ -188,4 +253,62 @@ test("accounting failure is prominent, disables resume, and symbol quarantine st
   await expect(page.getByRole("button", { name: "RESUME PAPER" })).toBeDisabled();
   await expect(page.locator("#market-rows")).toContainText("QUARANTINED");
   await expect(page.locator("#market-rows")).toContainText("WAITING EDGE");
+
+  const analyze = page.getByRole("button", { name: "ANALYZE & AUTO-FIX" });
+  await expect(analyze).toBeEnabled();
+  let finishAnalysis;
+  const pending = new Promise((resolve) => { finishAnalysis = resolve; });
+  await page.route("**/api/control/analyze-repair", async (route) => {
+    expect(route.request().method()).toBe("POST");
+    await pending;
+    state.recovery = {
+      status: "BLOCKED", code: "ACCOUNTING_INVALID", checked_at_utc: "2026-09-03T06:00:00Z",
+      trigger: "HALTED: checkpoint/ledger equity mismatch", detail: "checkpoint/ledger equity mismatch",
+      checks: ["Checkpoint and full fill ledger: INVALID", "Public market data: LIVE"], actions: [],
+      next_action: "Investigate or restore verified evidence; automatic reset is forbidden.",
+    };
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify(state) });
+  });
+  await analyze.click();
+  await expect(page.locator("#analyze-button")).toHaveText("ANALYZING…");
+  await expect(page.locator("#analyze-button")).toBeDisabled();
+  await page.evaluate(() => refresh());
+  await expect(page.locator("#analyze-button")).toBeDisabled();
+  finishAnalysis();
+  await expect(page.locator("#recovery-status")).toContainText("ANALYSIS BLOCKED");
+  await expect(page.locator("#recovery-next")).toContainText("automatic reset is forbidden");
+  await expect(page.getByRole("button", { name: "RESUME PAPER" })).toBeDisabled();
+  await expect(analyze).toBeEnabled();
+  await page.reload();
+  await expect(page.locator("#recovery-status")).toContainText("ANALYSIS BLOCKED");
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.screenshot({ path: "test-results/analysis-blocked-mobile.png", fullPage: true });
+
+  await page.route("**/api/control/analyze-repair", (route) => route.fulfill({
+    status: 409, contentType: "application/json", body: JSON.stringify({ error: "Analysis is already running." }),
+  }));
+  await analyze.click();
+  await expect(page.locator("#control-feedback")).toContainText("Analysis is already running.");
+  await expect(analyze).toBeEnabled();
+
+  await page.route("**/api/control/analyze-repair", (route) => {
+    state.accounting.state = "VALID";
+    state.risk.state = "OK";
+    state.trading_state = "ACTIVE";
+    state.strategy.armed = true;
+    state.controls.pause_allowed = true;
+    state.recovery = {
+      ...state.recovery, status: "FIXED", code: "HEALTHY", detail: "Safety checks pass; PAPER entries are enabled.",
+      checks: ["Checkpoint and full fill ledger: VALID", "Public market data: LIVE"],
+      actions: ["Resumed PAPER entries after safety checks passed."], next_action: "The strategy still waits for a qualified signal.",
+    };
+    return route.fulfill({ contentType: "application/json", body: JSON.stringify(state) });
+  });
+  await analyze.click();
+  await expect(page.locator("#recovery-status")).toContainText("ANALYSIS FIXED");
+  await expect(page.locator("#trading-state")).toHaveText("ACTIVE");
+  await expect(page.locator("#recovery-checks")).toContainText("Resumed PAPER entries");
+  await expect(page.locator("#control-feedback")).toBeHidden();
+  await expect(analyze).toBeEnabled();
 });

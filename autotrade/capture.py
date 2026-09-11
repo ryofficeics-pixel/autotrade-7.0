@@ -7,7 +7,7 @@ import os
 import subprocess
 import time
 from collections import deque
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -135,7 +135,7 @@ class RawEventRecorder:
         received_ts_ns: int,
         connection_id: int,
         payload: object,
-    ) -> None:
+    ) -> dict[str, object]:
         if self._closed:
             raise DatasetError("capture dataset is already closed")
         self._count += 1
@@ -155,7 +155,8 @@ class RawEventRecorder:
         }
         canonical = _canonical_json(record)
         event_hash = hashlib.sha256(canonical.encode()).hexdigest()
-        self._file.write(_canonical_json({**record, "event_hash": event_hash}) + "\n")
+        written = {**record, "event_hash": event_hash}
+        self._file.write(_canonical_json(written) + "\n")
         self._file.flush()
         if self._count % 256 == 0:
             os.fsync(self._file.fileno())
@@ -176,6 +177,7 @@ class RawEventRecorder:
                 self._latency_total_ms += latency_ms
                 self._latency_samples += 1
                 self._latency_max_ms = max(self._latency_max_ms, latency_ms)
+        return written
 
     def close(
         self,
@@ -218,9 +220,7 @@ class RawEventRecorder:
             "final_event_hash": self._last_hash,
             "event_file_bytes": self.events_path.stat().st_size,
             "latency_samples": self._latency_samples,
-            "average_observed_latency_ms": round(
-                self._latency_total_ms / self._latency_samples, 3
-            )
+            "average_observed_latency_ms": round(self._latency_total_ms / self._latency_samples, 3)
             if self._latency_samples
             else None,
             "maximum_observed_latency_ms": round(self._latency_max_ms, 3)
@@ -239,7 +239,12 @@ class RawEventRecorder:
 class GateMarketCapture:
     """Captures public Gate futures data without influencing the paper engine."""
 
-    def __init__(self, symbols: Sequence[str], recorder: RawEventRecorder) -> None:
+    def __init__(
+        self,
+        symbols: Sequence[str],
+        recorder: RawEventRecorder,
+        event_sink: Callable[[dict[str, object]], None] | None = None,
+    ) -> None:
         normalized = tuple(dict.fromkeys(symbols))
         if not normalized or len(normalized) > 10:
             raise ValueError("capture requires between 1 and 10 symbols")
@@ -249,6 +254,32 @@ class GateMarketCapture:
         self.recorder = recorder
         self.trackers = {symbol: BookSequenceTracker() for symbol in normalized}
         self.connections = 0
+        self.event_sink = event_sink
+
+    def _record(
+        self,
+        *,
+        source: str,
+        channel: str,
+        event: str,
+        symbol: str | None,
+        exchange_ts_ms: int | None,
+        received_ts_ns: int,
+        connection_id: int,
+        payload: object,
+    ) -> None:
+        record = self.recorder.append(
+            source=source,
+            channel=channel,
+            event=event,
+            symbol=symbol,
+            exchange_ts_ms=exchange_ts_ms,
+            received_ts_ns=received_ts_ns,
+            connection_id=connection_id,
+            payload=payload,
+        )
+        if self.event_sink is not None:
+            self.event_sink(record)
 
     async def run(self, duration_seconds: int) -> Path:
         if not 10 <= duration_seconds <= 86_400:
@@ -273,7 +304,7 @@ class GateMarketCapture:
                 try:
                     await self._connection(websocket, self.connections, deadline)
                 except (DatasetError, ConnectionClosed, OSError, TimeoutError) as exc:
-                    self.recorder.append(
+                    self._record(
                         source="AUTOTRADE_CAPTURE",
                         channel="capture.connection",
                         event="disconnected",
@@ -321,7 +352,7 @@ class GateMarketCapture:
         connection_id: int,
         deadline: float,
     ) -> None:
-        self.recorder.append(
+        self._record(
             source="AUTOTRADE_CAPTURE",
             channel="capture.connection",
             event="connected",
@@ -363,9 +394,7 @@ class GateMarketCapture:
                     )
                     if snapshot_gap:
                         snapshot_tasks.add(
-                            asyncio.create_task(
-                                self._snapshot_to_queue(str(symbol_value), queue)
-                            )
+                            asyncio.create_task(self._snapshot_to_queue(str(symbol_value), queue))
                         )
                 else:
                     gap_symbol = self._record_ws_message(payload, received_ns, connection_id)
@@ -423,7 +452,7 @@ class GateMarketCapture:
         base_id = _positive_int(snapshot.get("id"), "snapshot id")
         status = self.trackers[symbol].snapshot(base_id)
         exchange_ts_ms = _timestamp_ms(snapshot.get("current"))
-        self.recorder.append(
+        self._record(
             source="GATE_FUTURES_REST",
             channel="futures.order_book_snapshot",
             event="snapshot",
@@ -457,9 +486,7 @@ class GateMarketCapture:
         except GateMarketDataError as exc:
             raise DatasetError(str(exc)) from exc
         symbols = {
-            str(record["contract"])
-            for record in records
-            if isinstance(record.get("contract"), str)
+            str(record["contract"]) for record in records if isinstance(record.get("contract"), str)
         }
         symbol = next(iter(symbols)) if len(symbols) == 1 else "MULTI" if symbols else None
         exchange_times = [
@@ -468,11 +495,9 @@ class GateMarketCapture:
             if record.get("exchange_time_ms") is not None
         ]
         exchange_ts_ms = (
-            max(exchange_times)
-            if exchange_times
-            else _optional_int(message.get("time_ms"))
+            max(exchange_times) if exchange_times else _optional_int(message.get("time_ms"))
         )
-        self.recorder.append(
+        self._record(
             source="GATE_FUTURES_WS",
             channel=channel,
             event=event,

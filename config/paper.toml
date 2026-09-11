@@ -40,6 +40,42 @@ slippage_bps = "2"
 daily_loss_usdt = "6"
 max_drawdown_pct = "3"
 
+[paper_strategy.entry_v3]
+enabled = true
+feature_window_events = 256
+feature_window_ms = 5000
+minimum_events = 12
+
+[paper_strategy.entry_v3.impulse]
+window_ms = 1500
+minimum_bps = "8"
+
+[paper_strategy.entry_v3.pullback]
+minimum_ratio = "0.20"
+maximum_ratio = "0.60"
+reacceleration_bps = "2"
+
+[paper_strategy.entry_v3.flow]
+confirmation = "0.15"
+breakout_confirmation = "0.35"
+
+[paper_strategy.entry_v3.book]
+depth = 5
+confirmation = "0.05"
+maximum_spread_bps = "8"
+
+[paper_strategy.entry_v3.exhaustion]
+vwap_extension_bps = "15"
+
+[paper_strategy.entry_v3.edge]
+minimum_net_edge_bps = "5"
+continuation_fraction = "0.35"
+observed_latency_cap_ms = 1000
+
+[paper_strategy.entry_v3.whipsaw]
+block_ms = 30000
+maximum_reversals = 4
+
 [dashboard]
 host = "127.0.0.1"
 port = 8767

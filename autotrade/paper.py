@@ -36,11 +36,15 @@ from autotrade.integrity import (
     EXECUTION_MODEL_VERSION,
     MARKET_DATA_MODE,
     STRATEGY_VERSION,
+    TRANSITION_PROTOCOL_VERSION,
     EventLedger,
+    EventSpec,
     IntegrityError,
+    commit_transition,
     create_new_run,
     new_identity,
     reconcile_checkpoint,
+    recover_pending_transition,
     scan_ledger,
     utc_now,
 )
@@ -288,9 +292,7 @@ class RestMomentumStrategy(Strategy):
     def on_position_closed(self, event: PositionClosed) -> None:
         realized = event.realized_pnl.as_decimal()
         close_price = (
-            float(self._exit_notional / self._exit_quantity)
-            if self._exit_quantity
-            else None
+            float(self._exit_notional / self._exit_quantity) if self._exit_quantity else None
         )
         self._event(
             "position_closed",
@@ -300,9 +302,7 @@ class RestMomentumStrategy(Strategy):
             close_price=str(close_price),
             price=str(close_price),
             realized_pnl_usdt=str(realized),
-            pnl_pct=str(realized / self._entry_notional * 100)
-            if self._entry_notional
-            else "0",
+            pnl_pct=str(realized / self._entry_notional * 100) if self._entry_notional else "0",
             fee_usdt=str(self.entry_fee_usdt + self._exit_fee_usdt),
             reason=self._exit_reason or "ENGINE_CLOSE",
             exchange_timestamp=_ns_to_utc(event.ts_event),
@@ -411,6 +411,7 @@ class PaperTrader:
         self._run_id: str | None = None
         self._session_id = new_identity()
         self._ledger: EventLedger | None = None
+        self._pending_event_specs: list[EventSpec] = []
         self._metadata: dict[str, object] = {}
         self._checkpoint_sequence = 0
         self._starting_equity = settings.starting_balance_usdt
@@ -434,13 +435,40 @@ class PaperTrader:
 
     @property
     def monitored_symbols(self) -> tuple[str, ...]:
+        recovery_position = self._recovery_position
+        if recovery_position is not None:
+            return (str(recovery_position["symbol"]),)
         return tuple(self._strategies)
+
+    def recheck_integrity(self) -> bool:
+        """Re-read durable evidence; never reset a run or clear a live execution fault."""
+        if self._state_error is not None and self._ledger is not None:
+            return False
+        try:
+            if not self._state_path.is_file():
+                raise IntegrityError("checkpoint is missing; automatic reset is forbidden")
+            if self._engine is None:
+                self._load_state()
+            else:
+                state = json.loads(self._state_path.read_text(encoding="utf-8"))
+                summary = scan_ledger(self._events_path, str(self._run_id))
+                if summary.legacy_count or self._ledger is None:
+                    raise IntegrityError("current run has no attributable ledger")
+                if summary.last_sequence != self._ledger.last_sequence:
+                    raise IntegrityError("durable ledger changed outside the running engine")
+                reconcile_checkpoint(state, summary)
+                if self._state_error is None:
+                    self._persist_state()
+        except (OSError, ValueError, TypeError, KeyError, InvalidOperation) as exc:
+            self._set_state_invalid(str(exc))
+        self._logger.info(
+            "Accounting recheck: %s; reason=%s", self._accounting_state, self._accounting_error
+        )
+        return self._accounting_state == "VALID" and self._state_error is None
 
     def process(self, markets: list[dict[str, object]], *, entry_enabled: bool) -> None:
         current_markets = {
-            str(item["symbol"]): item
-            for item in markets
-            if isinstance(item.get("symbol"), str)
+            str(item["symbol"]): item for item in markets if isinstance(item.get("symbol"), str)
         }
         self._last_markets.update(current_markets)
         received = monotonic()
@@ -592,11 +620,7 @@ class PaperTrader:
 
         account = self._engine.cache.account_for_venue(Venue(self._settings.venue))
         balance_money = account.balance_total(Currency.from_str("USDT")) if account else None
-        balance = (
-            balance_money.as_decimal()
-            if balance_money
-            else self._initial_balance
-        )
+        balance = balance_money.as_decimal() if balance_money else self._initial_balance
         positions = self._engine.cache.positions_open()
         unrealized = Decimal(0)
         for position in positions:
@@ -635,8 +659,7 @@ class PaperTrader:
         elif not armed:
             alerts.append("REST Momentum tournament is paused.")
         elif any(
-            strategy.status.startswith("WARMING_UP")
-            for strategy in self._strategies.values()
+            strategy.status.startswith("WARMING_UP") for strategy in self._strategies.values()
         ):
             alerts.append(
                 "REST Momentum is monitoring all screened pairs and warming quote windows."
@@ -726,13 +749,11 @@ class PaperTrader:
                 )
                 precision = _decimal_places(price_increment)
                 if price_increment <= 0 or precision > 16:
-                    raise QuoteValidationError(
-                        f"invalid Gate price increment for {raw_symbol}"
-                    )
+                    raise QuoteValidationError(f"invalid Gate price increment for {raw_symbol}")
                 market_ask = _state_decimal(market.get("ask"), f"{raw_symbol}.ask")
-                trade_size = (
-                    self._settings.strategy_notional_usdt / market_ask
-                ).quantize(Decimal("0.000001"), rounding=ROUND_DOWN)
+                trade_size = (self._settings.strategy_notional_usdt / market_ask).quantize(
+                    Decimal("0.000001"), rounding=ROUND_DOWN
+                )
                 if trade_size <= 0:
                     raise QuoteValidationError(
                         f"paper trade quantity rounded to zero for {raw_symbol}"
@@ -768,9 +789,7 @@ class PaperTrader:
                     trade_size=trade_size,
                     window=self._settings.strategy_window,
                     entry_threshold_bps=float(self._settings.strategy_entry_threshold_bps),
-                    minimum_net_edge_bps=float(
-                        self._settings.strategy_minimum_net_edge_bps
-                    ),
+                    minimum_net_edge_bps=float(self._settings.strategy_minimum_net_edge_bps),
                     minimum_confidence=float(self._settings.strategy_minimum_confidence),
                     stop_loss_bps=float(self._settings.strategy_stop_loss_bps),
                     take_profit_bps=float(self._settings.strategy_take_profit_bps),
@@ -818,17 +837,18 @@ class PaperTrader:
         if self._ledger is None:
             self._logger.error("Paper reconciliation failed: %s", reason)
             return
-        try:
-            self._ledger.append(
+        self._pending_event_specs.append(
+            (
                 "state_reconciliation_failed",
-                reason=reason,
-                checkpoint_equity=str(self._initial_balance),
-                engine_equity=str(engine_equity),
-                ledger_equity=str(ledger_equity),
-                difference=str(engine_equity - ledger_equity),
+                {
+                    "reason": reason,
+                    "checkpoint_equity": str(self._initial_balance),
+                    "engine_equity": str(engine_equity),
+                    "ledger_equity": str(ledger_equity),
+                    "difference": str(engine_equity - ledger_equity),
+                },
             )
-        except (OSError, ValueError) as exc:
-            self._logger.error("Could not persist reconciliation event: %s", exc)
+        )
 
     def _quote(self, symbol: str, market: dict[str, object]) -> QuoteTick:
         instrument = self._instruments[symbol]
@@ -846,9 +866,7 @@ class PaperTrader:
         ask_price = Price.from_str(f"{ask:.{precision}f}")
         timestamp = max(time_ns(), self._last_ts + 1)
         self._last_ts = timestamp
-        mark = ((bid + ask) / 2 / increment).to_integral_value(
-            rounding=ROUND_FLOOR
-        ) * increment
+        mark = ((bid + ask) / 2 / increment).to_integral_value(rounding=ROUND_FLOOR) * increment
         self._last_marks[symbol] = Price.from_str(f"{mark:.{precision}f}")
         return QuoteTick(
             instrument_id=instrument.id,
@@ -945,9 +963,7 @@ class PaperTrader:
             strategy={
                 "name": "REST Momentum Tournament",
                 "symbol": str(
-                    (self._recovery_position or {}).get(
-                        "symbol", self._settings.strategy_symbol
-                    )
+                    (self._recovery_position or {}).get("symbol", self._settings.strategy_symbol)
                 ),
                 "status": status,
                 "armed": False,
@@ -1038,9 +1054,7 @@ class PaperTrader:
             has_legacy = (
                 self._legacy_events_path.is_file() and self._legacy_events_path.stat().st_size > 0
             )
-            has_prior_run = any(
-                (self._project_root / "data" / "runs").glob("*/metadata.json")
-            )
+            has_prior_run = any((self._project_root / "data" / "runs").glob("*/metadata.json"))
             if has_legacy or has_prior_run:
                 self._set_state_invalid(
                     "checkpoint is missing while prior paper-run evidence exists"
@@ -1065,6 +1079,20 @@ class PaperTrader:
                 raise ValueError("unsupported state schema")
             if state.get("mode") != "PAPER":
                 raise ValueError("mode mismatch")
+            if schema_version == STATE_SCHEMA_VERSION:
+                run_id = str(state.get("run_id", ""))
+                ledger_path = (
+                    self._project_root / Path(str(state.get("event_ledger_path", "")))
+                ).resolve()
+                if not ledger_path.is_relative_to(self._project_root.resolve()):
+                    raise IntegrityError("event ledger path escapes the project root")
+                recovered = recover_pending_transition(self._state_path, ledger_path, run_id)
+                if recovered is not None:
+                    state = recovered
+                    self._logger.warning(
+                        "Recovered committed paper transition %s",
+                        recovered.get("last_transition_id"),
+                    )
             self._initial_balance = _state_decimal(state["balance_usdt"], "balance_usdt")
             if self._initial_balance < 0:
                 raise ValueError("balance_usdt must be non-negative")
@@ -1105,7 +1133,7 @@ class PaperTrader:
             self._recovery_position = position
             if position is not None:
                 self._risk_halted = True
-                self._risk_halt_reason = "RECOVERY_REQUIRED"
+                self._risk_halt_reason = self._risk_halt_reason or "RECOVERY_REQUIRED"
             self._restore_risk_halt_for_current_window()
             if schema_version != STATE_SCHEMA_VERSION:
                 raise IntegrityError(
@@ -1153,6 +1181,7 @@ class PaperTrader:
         self._ledger = EventLedger(ledger_path, run_id, self._session_id)
         self._accounting_state = "VALID"
         self._accounting_error = None
+        self._state_error = None
         self._rollover_review_required = bool(state.get("rollover_review_required", False))
         if self._recovery_position is not None:
             position_id = self._recovery_position.get("position_id")
@@ -1178,6 +1207,7 @@ class PaperTrader:
         self._entry_enabled = False
         self._risk_halted = True
         self._risk_halt_reason = "STATE_INVALID"
+        self.set_entry_enabled(False)
 
     def _load_risk_state(self, state: dict[str, object]) -> None:
         today = datetime.now(UTC).date().isoformat()
@@ -1270,31 +1300,19 @@ class PaperTrader:
         if self._ledger is None or self._run_id is None:
             self._set_state_invalid("current paper run has no v3 event ledger")
             raise RuntimeError(self._state_error)
-        summary = self._ledger.summary
         open_entry_fee = (
             _state_decimal(position["entry_fee_usdt"], "position.entry_fee_usdt")
             if position is not None
             else Decimal(0)
         )
-        expected_balance = self._starting_equity + summary.realized_pnl - open_entry_fee
-        mismatches = []
-        if abs(balance - expected_balance) > ACCOUNTING_TOLERANCE:
-            mismatches.append("engine/ledger balance")
-        if abs(fees - summary.fees) > ACCOUNTING_TOLERANCE:
-            mismatches.append("engine/ledger fees")
-        if trades != summary.trade_count:
-            mismatches.append("engine/ledger trade count")
-        if mismatches:
-            reason = f"reconciliation failed: {', '.join(mismatches)}"
-            self._emit_reconciliation_failure(reason, balance, expected_balance)
-            self._set_state_invalid(reason)
-            raise RuntimeError(reason)
-        self._cumulative_realized_pnl = summary.realized_pnl
+        self._cumulative_realized_pnl = balance - self._starting_equity + open_entry_fee
         self._checkpoint_sequence += 1
         state = {
             "schema_version": STATE_SCHEMA_VERSION,
             "checkpoint_sequence": self._checkpoint_sequence,
             "last_event_sequence": self._ledger.last_sequence,
+            "last_committed_event_sequence": self._ledger.last_sequence,
+            "transition_protocol_version": TRANSITION_PROTOCOL_VERSION,
             "run_id": self._run_id,
             "session_id": self._session_id,
             "event_ledger_path": str(self._events_path.relative_to(self._project_root)),
@@ -1316,7 +1334,7 @@ class PaperTrader:
             "updated_at_utc": utc_now(),
             "updated_ns": time_ns(),
         }
-        self._write_state(state)
+        self._commit_checkpoint(state)
 
     def _accounting_totals(
         self,
@@ -1401,29 +1419,23 @@ class PaperTrader:
             symbol,
         )
         self._recovery_position = None
-        self._risk_halted = False
-        self._risk_halt_reason = None
+        if self._risk_halt_reason == "RECOVERY_REQUIRED":
+            self._risk_halted = False
+            self._risk_halt_reason = None
         self._peak_equity = max(self._peak_equity, self._initial_balance)
         self._restore_risk_halt_for_current_window()
         if self._ledger is None or self._run_id is None:
             self._set_state_invalid("recovery has no durable v3 ledger")
             raise RuntimeError(self._state_error)
-        summary = self._ledger.summary
-        if abs(self._initial_balance - (self._starting_equity + summary.realized_pnl)) > (
-            ACCOUNTING_TOLERANCE
-        ):
-            self._set_state_invalid("recovery balance does not reconcile to the ledger")
-            raise RuntimeError(self._state_error)
-        if abs(self._restored_fees - summary.fees) > ACCOUNTING_TOLERANCE:
-            self._set_state_invalid("recovery fees do not reconcile to the ledger")
-            raise RuntimeError(self._state_error)
-        self._cumulative_realized_pnl = summary.realized_pnl
+        self._cumulative_realized_pnl = self._initial_balance - self._starting_equity
         self._checkpoint_sequence += 1
-        self._write_state(
+        self._commit_checkpoint(
             {
                 "schema_version": STATE_SCHEMA_VERSION,
                 "checkpoint_sequence": self._checkpoint_sequence,
                 "last_event_sequence": self._ledger.last_sequence,
+                "last_committed_event_sequence": self._ledger.last_sequence,
+                "transition_protocol_version": TRANSITION_PROTOCOL_VERSION,
                 "run_id": self._run_id,
                 "session_id": self._session_id,
                 "event_ledger_path": str(self._events_path.relative_to(self._project_root)),
@@ -1446,6 +1458,32 @@ class PaperTrader:
                 "updated_ns": time_ns(),
             }
         )
+
+    def _commit_checkpoint(self, state: dict[str, object]) -> None:
+        if self._ledger is None:
+            raise RuntimeError("paper event ledger is unavailable")
+        try:
+            if self._pending_event_specs:
+                committed = commit_transition(
+                    self._ledger,
+                    self._state_path,
+                    state,
+                    self._pending_event_specs,
+                )
+            else:
+                reconcile_checkpoint(state, self._ledger.summary)
+                self._write_state(state)
+                committed = []
+        except (IntegrityError, OSError, ValueError) as exc:
+            self._set_state_invalid(str(exc))
+            raise
+        self._pending_event_specs.clear()
+        self._cumulative_realized_pnl = self._ledger.summary.realized_pnl
+        for event in committed:
+            record = self._trade_record(event)
+            if record is not None:
+                self._trade_history.append(record)
+        self._trade_history = list(reversed(self._recent_trade_history()))
 
     def _write_state(self, state: dict[str, object]) -> None:
         self._state_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1485,20 +1523,14 @@ class PaperTrader:
             return
         if self._ledger is None:
             raise RuntimeError("refusing to write unversioned paper events")
-        written: list[dict[str, object]] = []
         for raw_event in events:
-            written.append(self._append_strategy_event(raw_event, symbol))
-        for event in written:
-            record = self._trade_record(event)
-            if record is not None:
-                self._trade_history.append(record)
-        self._trade_history = list(reversed(self._recent_trade_history()))
+            self._pending_event_specs.append(self._prepare_strategy_event(raw_event, symbol))
 
-    def _append_strategy_event(
+    def _prepare_strategy_event(
         self,
         raw_event: dict[str, object],
         symbol: str,
-    ) -> dict[str, object]:
+    ) -> EventSpec:
         if self._ledger is None:
             raise RuntimeError("paper event ledger is unavailable")
         event_type = str(raw_event.get("event", ""))
@@ -1555,6 +1587,7 @@ class PaperTrader:
                 client_order_id = raw_client_order_id
 
         values: dict[str, object] = {
+            "timestamp_utc": observed,
             "timestamp_exchange": raw_event.get("exchange_timestamp"),
             "timestamp_local_or_receive": observed,
             "symbol": symbol,
@@ -1573,9 +1606,7 @@ class PaperTrader:
             "reason": raw_event.get("reason"),
             "exchange_timestamp": raw_event.get("exchange_timestamp"),
             "local_receive_timestamp": observed,
-            "decision_timestamp": observed
-            if event_type in {"signal", "exit_signal"}
-            else None,
+            "decision_timestamp": observed if event_type in {"signal", "exit_signal"} else None,
             "order_submit_timestamp": observed if event_type == "order_submitted" else None,
             "fill_timestamp": observed if event_type == "fill" else None,
             "latency_ms": None,
@@ -1601,10 +1632,9 @@ class PaperTrader:
                 opened = datetime.fromisoformat(opened_at.replace("Z", "+00:00"))
                 closed = datetime.fromisoformat(closed_at.replace("Z", "+00:00"))
                 values["holding_time_ms"] = max(0, round((closed - opened).total_seconds() * 1000))
-        written = self._ledger.append(event_type, **values)
         if event_type == "position_closed":
             self._lifecycle.pop(symbol, None)
-        return written
+        return event_type, values
 
     def _open_trade(self, position: object | None) -> dict[str, object] | None:
         if position is not None:
@@ -1807,12 +1837,10 @@ def construct_pessimistic_prices(
     slippage = slippage_bps / Decimal(10_000)
     modeled_bid = raw_bid * (Decimal(1) - slippage)
     modeled_ask = raw_ask * (Decimal(1) + slippage)
-    bid = (
-        modeled_bid / price_increment
-    ).to_integral_value(rounding=ROUND_FLOOR) * price_increment
-    ask = (
-        modeled_ask / price_increment
-    ).to_integral_value(rounding=ROUND_CEILING) * price_increment
+    bid = (modeled_bid / price_increment).to_integral_value(rounding=ROUND_FLOOR) * price_increment
+    ask = (modeled_ask / price_increment).to_integral_value(
+        rounding=ROUND_CEILING
+    ) * price_increment
     if bid <= 0:
         raise QuoteValidationError("modeled bid rounded to zero")
     if ask <= bid:
@@ -1833,8 +1861,8 @@ def _state_decimal(value: object, field_name: str) -> Decimal:
 
 
 def _ns_to_utc(timestamp_ns: int) -> str:
-    return datetime.fromtimestamp(timestamp_ns / 1_000_000_000, UTC).isoformat().replace(
-        "+00:00", "Z"
+    return (
+        datetime.fromtimestamp(timestamp_ns / 1_000_000_000, UTC).isoformat().replace("+00:00", "Z")
     )
 
 

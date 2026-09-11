@@ -81,12 +81,24 @@ Halt new entries when:
 
 Auto-reconnect is allowed.
 
+An explicit Analyze & Auto-fix request may revalidate a startup checkpoint using all recorded
+split fills and restore a proven valid recovery state. It must preserve balances, run identity,
+history, risk limits, manual pauses, and critical execution/persistence faults. It cannot
+flatten positions or acknowledge a daily-loss review implicitly. Recovered positions still
+require the separate manual flatten/resume controls and a fresh validated quote.
+
 Transient public market-data staleness and request failures are explicitly recoverable. They pause
 new entries while the feed is unhealthy and automatically restore entry eligibility only after a
 new snapshot passes validation and freshness checks.
 
 Auto-resume trading after any other critical state failure is not allowed. Execution, persistence,
 risk-limit and invalid-state failures remain `HALTED` until explicit recovery proves state integrity.
+
+A flat, reconciled `MAX_DRAWDOWN` run may be closed from the local dashboard only by explicitly
+starting a new PAPER experiment. The transition must archive the completed run, create a new run
+identity and empty ledger, retain PAPER mode and all configured limits, require fresh market data
+and safe storage, and require a user confirmation. It must not mutate the halted run or present the
+new experiment as a resumed continuation.
 
 `accounting.state` must equal `VALID` before either manual or watchdog resume is permitted. A single
 invalid symbol quote is quarantined locally and does not become a portfolio halt; an account, risk,

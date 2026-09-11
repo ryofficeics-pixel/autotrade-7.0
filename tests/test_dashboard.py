@@ -1,15 +1,22 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
+import threading
 import unittest
 from dataclasses import replace
 from decimal import Decimal
 from email.message import Message
+from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, patch
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
 
 from autotrade.config import Settings, load_settings
 from autotrade.dashboard import (
+    DashboardServer,
     DashboardState,
     fetch_gate_price_increments,
     rank_tickers,
@@ -35,6 +42,11 @@ class DashboardTests(unittest.TestCase):
         class FakePaper:
             risk_halted = False
             accounting_state = "VALID"
+            risk_state = "OK"
+            strategy_status = "PAUSED"
+            storage_safe = True
+            rechecks = 0
+            closed = False
 
             def process(self, markets: object, *, entry_enabled: bool) -> None:
                 self.entry_enabled = entry_enabled
@@ -46,10 +58,17 @@ class DashboardTests(unittest.TestCase):
                 return False
 
             def authorize_resume(self) -> bool:
+                if self.risk_state == "DAILY_LOSS_REVIEW":
+                    self.risk_halted = False
+                    self.risk_state = "OK"
                 return self.accounting_state == "VALID" and not self.risk_halted
 
+            def recheck_integrity(self) -> bool:
+                self.rechecks += 1
+                return self.accounting_state == "VALID"
+
             def close(self) -> None:
-                return None
+                self.closed = True
 
             def snapshot(self) -> PaperSnapshot:
                 return PaperSnapshot(
@@ -65,7 +84,7 @@ class DashboardTests(unittest.TestCase):
                     strategy={
                         "name": "REST Momentum",
                         "symbol": "ETH_USDT",
-                        "status": "PAUSED",
+                        "status": self.strategy_status,
                         "armed": False,
                         "expected_gross_bps": 0.0,
                         "expected_cost_bps": 0.0,
@@ -78,10 +97,13 @@ class DashboardTests(unittest.TestCase):
                     alerts=[],
                     diagnostics={
                         "accounting": {"state": self.accounting_state, "reason": None},
-                        "risk": {"state": "OK"},
+                        "risk": {
+                            "state": self.risk_state,
+                            "rollover_review_required": self.risk_state == "DAILY_LOSS_REVIEW",
+                        },
                         "execution_model": {"state": "PAPER_SIM"},
                         "run": {},
-                        "storage": {"safe": True},
+                        "storage": {"safe": self.storage_safe},
                         "symbols": {"quarantined": {}},
                     },
                 )
@@ -262,6 +284,53 @@ class DashboardTests(unittest.TestCase):
         self.assertTrue(paused["controls"]["resume_allowed"])  # type: ignore[index]
         self.assertFalse(paused["controls"]["auto_resume_allowed"])  # type: ignore[index]
 
+    def test_daily_loss_rollover_allows_only_manual_resume(self) -> None:
+        report = RuntimeReport("PAPER", "test", "TESTER-001", "GATE", "300", "1", True, True)
+        paper = self.paper()
+        paper.risk_halted = True  # type: ignore[attr-defined]
+        paper.risk_state = "DAILY_LOSS_REVIEW"  # type: ignore[attr-defined]
+        state = DashboardState(
+            report,
+            self.settings(),
+            paper,  # type: ignore[arg-type]
+            self.tradingview(),  # type: ignore[arg-type]
+        )
+        state.apply_snapshot([{"selected": True}], 10, monotonic_now=100)
+
+        halted = state.snapshot(monotonic_now=100)
+        self.assertTrue(halted["controls"]["resume_allowed"])  # type: ignore[index]
+        self.assertFalse(halted["controls"]["auto_resume_allowed"])  # type: ignore[index]
+        self.assertTrue(state.resume(monotonic_now=100))
+        self.assertEqual(state.snapshot(monotonic_now=100)["trading_state"], "ACTIVE")
+
+    def test_max_drawdown_can_start_only_a_new_archived_paper_run(self) -> None:
+        report = RuntimeReport("PAPER", "test", "TESTER-001", "GATE", "300", "1", True, True)
+        halted: Any = self.paper()
+        halted.risk_halted = True
+        halted.risk_state = "MAX_DRAWDOWN"
+        replacement: Any = self.paper()
+        state = DashboardState(
+            report,
+            self.settings(),
+            halted,
+            self.tradingview(),  # type: ignore[arg-type]
+            config_path=Path("config/paper.toml"),
+            paper_factory=lambda: replacement,
+        )
+        state.apply_snapshot([{"selected": True}], 10)
+        before = state.snapshot()
+        self.assertTrue(before["controls"]["new_paper_run_allowed"])  # type: ignore[index]
+
+        metadata = {"run_id": "new-run-id"}
+        with patch("autotrade.dashboard.create_new_run", return_value=metadata) as create:
+            self.assertEqual(state.start_new_paper_run(), metadata)
+        create.assert_called_once()
+        self.assertTrue(halted.closed)
+        self.assertTrue(replacement.entry_enabled)
+        after = state.snapshot()
+        self.assertEqual(after["trading_state"], "ACTIVE")
+        self.assertFalse(after["controls"]["new_paper_run_allowed"])  # type: ignore[index]
+
     def test_invalid_accounting_blocks_manual_and_watchdog_resume(self) -> None:
         settings = self.settings()
         report = RuntimeReport("PAPER", "test", "TESTER-001", "GATE", "300", "1", True, True)
@@ -317,6 +386,111 @@ class DashboardTests(unittest.TestCase):
 
         headers.replace_header("Origin", "https://evil.example")
         self.assertFalse(request_is_local(headers, 8765, require_origin=True))
+
+    def test_analysis_repairs_startup_and_preserves_safety_halts(self) -> None:
+        report = RuntimeReport("PAPER", "test", "TESTER-001", "GATE", "300", "1", True, True)
+        for failure, code in (
+            (None, "HEALTHY"),
+            ("accounting", "ACCOUNTING_INVALID"),
+            ("risk", "RISK_HALT"),
+            ("storage", "STORAGE_LOW"),
+            ("execution", "EXECUTION_FAULT"),
+            ("manual", "MANUAL_PAUSE"),
+            ("feed", "FEED_UNHEALTHY"),
+            ("position", "RECOVERY_REQUIRED"),
+        ):
+            with self.subTest(failure=failure):
+                paper: Any = self.paper()
+                state = DashboardState(
+                    report,
+                    self.settings(),
+                    paper,
+                    self.tradingview(),  # type: ignore[arg-type]
+                )
+                state.apply_snapshot([{"selected": True}], 10)
+                if failure == "accounting":
+                    paper.accounting_state = "INVALID"
+                elif failure == "risk":
+                    paper.risk_halted = True
+                    paper.risk_state = "DAILY_LOSS_REVIEW"
+                elif failure == "position":
+                    paper.risk_halted = True
+                    paper.strategy_status = "RECOVERY_REQUIRED"
+                elif failure == "storage":
+                    paper.storage_safe = False
+                elif failure == "manual":
+                    state.pause()
+                elif failure == "feed":
+                    state.apply_error(RuntimeError("Gate unavailable"))
+                elif failure == "execution":
+                    with patch.object(paper, "process", side_effect=RuntimeError("uncertain")):
+                        state.apply_snapshot([{"selected": True}], 10)
+                result = state.analyze_and_repair("test halt")
+                self.assertEqual(result["code"], code)
+                self.assertEqual(result["status"], "FIXED" if failure is None else "BLOCKED")
+                self.assertEqual(paper.entry_enabled, failure is None)
+                if failure is None:
+                    self.assertEqual(state.analyze_and_repair("repeat")["status"], "HEALTHY")
+                if failure in {"storage", "execution"}:
+                    self.assertEqual(paper.rechecks, 0)
+
+    def test_repair_failure_stays_halted_and_is_reported(self) -> None:
+        report = RuntimeReport("PAPER", "test", "TESTER-001", "GATE", "300", "1", True, True)
+        paper: Any = self.paper()
+        state = DashboardState(
+            report,
+            self.settings(),
+            paper,
+            self.tradingview(),  # type: ignore[arg-type]
+        )
+        state.apply_snapshot([{"selected": True}], 10)
+        with patch.object(paper, "recheck_integrity", side_effect=OSError("disk write failed")):
+            result = state.analyze_and_repair("test")
+        self.assertEqual(result["code"], "EXECUTION_FAULT")
+        self.assertIn("disk write failed", str(result["detail"]))
+        self.assertFalse(state.resume())
+
+    def test_repair_endpoint_is_same_origin_and_rejects_concurrent_repairs(self) -> None:
+        report = RuntimeReport("PAPER", "test", "TESTER-001", "GATE", "300", "1", True, True)
+        state = DashboardState(
+            report,
+            self.settings(),
+            self.paper(),  # type: ignore[arg-type]
+            self.tradingview(),  # type: ignore[arg-type]
+        )
+        poller = MagicMock()
+        poller.poll_once.side_effect = lambda: state.apply_snapshot([{"selected": True}], 10)
+        server = DashboardServer(("127.0.0.1", 0), state, poller, logging.getLogger("test.api"))
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        origin = f"http://127.0.0.1:{server.server_port}"
+        try:
+            request = Request(origin + "/api/control/analyze-repair", method="POST")
+            with self.assertRaises(HTTPError) as denied:
+                urlopen(request, timeout=5)
+            self.assertEqual(denied.exception.code, 403)
+            poller.poll_once.assert_not_called()
+            request.add_header("Origin", origin)
+            new_run_request = Request(
+                origin + "/api/control/new-paper-run",
+                method="POST",
+                headers={"Origin": origin},
+            )
+            with self.assertRaises(HTTPError) as unconfirmed:
+                urlopen(new_run_request, timeout=5)
+            self.assertEqual(unconfirmed.exception.code, 400)
+            with server.repair_lock, self.assertRaises(HTTPError) as busy:
+                urlopen(request, timeout=5)
+            self.assertEqual(busy.exception.code, 409)
+            with urlopen(request, timeout=5) as response:
+                result = json.load(response)
+            self.assertEqual(result["recovery"]["status"], "FIXED")
+            self.assertEqual(result["trading_state"], "ACTIVE")
+            poller.poll_once.assert_called_once()
+        finally:
+            server.shutdown()
+            server.server_close()
+            worker.join(timeout=5)
 
 
 if __name__ == "__main__":

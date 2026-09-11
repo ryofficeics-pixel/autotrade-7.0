@@ -441,6 +441,19 @@ class GateLocalOrderBook:
             microprice=(best_ask * best_bid_size + best_bid * best_ask_size) / top_size,
         )
 
+    def levels(
+        self,
+        depth: int = 20,
+    ) -> tuple[tuple[tuple[Decimal, Decimal], ...], tuple[tuple[Decimal, Decimal], ...]]:
+        if self.update_id is None:
+            raise GateMarketDataError("order book is not synchronized")
+        if depth <= 0:
+            raise GateMarketDataError("depth must be positive")
+        bids = tuple(sorted(self._bids.items(), reverse=True)[:depth])
+        asks = tuple(sorted(self._asks.items())[:depth])
+        self._validate(dict(bids), dict(asks))
+        return bids, asks
+
     @staticmethod
     def _validate(
         bids: dict[Decimal, Decimal],

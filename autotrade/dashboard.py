@@ -5,6 +5,7 @@ import logging
 import math
 import threading
 import time
+from collections.abc import Callable
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from email.message import Message
@@ -15,6 +16,7 @@ from pathlib import Path
 from urllib.request import Request, urlopen
 
 from autotrade.config import Settings
+from autotrade.integrity import create_new_run
 from autotrade.paper import PaperTrader
 from autotrade.runtime import RuntimeReport, run_paper_smoke
 from autotrade.tradingview import TradingViewMonitor, build_tradingview_monitor
@@ -114,11 +116,7 @@ def rank_tickers(
         reverse=True,
     )
     selected = [market for market in eligible if market["symbol"] in required]
-    selected.extend(
-        market
-        for market in eligible
-        if market["symbol"] not in required
-    )
+    selected.extend(market for market in eligible if market["symbol"] not in required)
     selected = selected[: settings.active_symbols]
     return selected + rejected[: max(0, 12 - len(selected))]
 
@@ -172,11 +170,16 @@ class DashboardState:
         settings: Settings,
         paper: PaperTrader,
         tradingview: TradingViewMonitor,
+        *,
+        config_path: Path | None = None,
+        paper_factory: Callable[[], PaperTrader] | None = None,
     ) -> None:
         self._report = report
         self._settings = settings
         self._paper = paper
         self._tradingview = tradingview
+        self._config_path = config_path
+        self._paper_factory = paper_factory
         self._lock = threading.Lock()
         self._markets: list[dict[str, object]] = []
         self._last_success_monotonic: float | None = None
@@ -186,6 +189,7 @@ class DashboardState:
         self._execution_error: str | None = None
         self._manual_paused = False
         self._integrity_halted = True
+        self._recovery: dict[str, object] | None = None
 
     @property
     def monitored_symbols(self) -> tuple[str, ...]:
@@ -237,20 +241,233 @@ class DashboardState:
     def resume(self, *, monotonic_now: float | None = None) -> bool:
         with self._lock:
             now = monotonic_now if monotonic_now is not None else time.monotonic()
-            fresh, _ = self._fresh(now)
-            if not fresh or self._feed_error or self._execution_error:
-                return False
-            authorize_resume = getattr(self._paper, "authorize_resume", None)
-            if authorize_resume is not None and not authorize_resume():
-                return False
-            self._manual_paused = False
-            self._integrity_halted = False
-            self._paper.set_entry_enabled(True)
-            return True
+            return self._resume_locked(now)
+
+    def _resume_locked(self, now: float) -> bool:
+        fresh, _ = self._fresh(now)
+        diagnostics = self._paper.snapshot().diagnostics
+        storage = diagnostics.get("storage", {})
+        if (
+            not fresh
+            or self._feed_error
+            or self._execution_error
+            or self._report.mode != "PAPER"
+            or not self._report.risk_engine_enabled
+            or not self._settings.strategy_enabled
+            or not isinstance(storage, dict)
+            or storage.get("safe") is not True
+        ):
+            return False
+        if not self._paper.authorize_resume():
+            return False
+        self._manual_paused = False
+        self._integrity_halted = False
+        self._paper.set_entry_enabled(True)
+        return True
+
+    def analyze_and_repair(self, trigger: str) -> dict[str, object]:
+        with self._lock:
+            actions: list[str] = []
+            checks: list[str] = []
+            code, detail, next_action = self._diagnose_locked()
+            if code not in {"STORAGE_LOW", "ENGINE_UNSAFE", "EXECUTION_FAULT"}:
+                was_invalid = self._paper.snapshot().diagnostics.get("accounting", {})
+                try:
+                    valid = self._paper.recheck_integrity()
+                except Exception as exc:  # A failed repair must also fail closed.
+                    self._execution_error = f"Accounting recheck failed: {str(exc)[:160]}"
+                    self._integrity_halted = True
+                    self._paper.set_entry_enabled(False)
+                    valid = False
+                checks.append(
+                    "Checkpoint and full fill ledger: " + ("VALID" if valid else "INVALID")
+                )
+                if valid and isinstance(was_invalid, dict) and was_invalid.get("state") != "VALID":
+                    actions.append(
+                        "Restored accounting from verified checkpoint and all split fills."
+                    )
+            code, detail, next_action = self._diagnose_locked()
+            fresh, _ = self._fresh(time.monotonic())
+            checks.append(
+                "Public market data: " + ("LIVE" if fresh and not self._feed_error else "STALE")
+            )
+            checks.append(
+                "PAPER mode and risk engine: "
+                + (
+                    "OK"
+                    if self._report.mode == "PAPER" and self._report.risk_engine_enabled
+                    else "FAILED"
+                )
+            )
+            if code == "READY" and self._resume_locked(time.monotonic()):
+                actions.append("Resumed PAPER entries after safety checks passed.")
+                code, detail, next_action = self._diagnose_locked()
+            self._recovery = {
+                "checked_at_utc": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+                "status": "FIXED"
+                if code == "HEALTHY" and actions
+                else ("HEALTHY" if code == "HEALTHY" else "BLOCKED"),
+                "code": code,
+                "trigger": trigger,
+                "detail": detail,
+                "checks": checks,
+                "actions": actions,
+                "next_action": next_action,
+            }
+            return dict(self._recovery)
+
+    def _diagnose_locked(self) -> tuple[str, str, str]:
+        paper = self._paper.snapshot()
+        diagnostics = paper.diagnostics
+        accounting = diagnostics.get("accounting", {})
+        storage = diagnostics.get("storage", {})
+        risk = diagnostics.get("risk", {})
+        if self._report.mode != "PAPER" or not self._report.risk_engine_enabled:
+            return (
+                "ENGINE_UNSAFE",
+                "PAPER/risk engine safety check failed.",
+                "Repair backend configuration.",
+            )
+        if not isinstance(storage, dict) or storage.get("safe") is not True:
+            return (
+                "STORAGE_LOW",
+                "Insufficient safe storage for persistence.",
+                "Free disk space, then retry.",
+            )
+        if self._execution_error:
+            return (
+                "EXECUTION_FAULT",
+                self._execution_error,
+                "Execution requires review; automatic resume is blocked.",
+            )
+        if not isinstance(accounting, dict) or accounting.get("state") != "VALID":
+            reason = accounting.get("reason") if isinstance(accounting, dict) else None
+            return (
+                "ACCOUNTING_INVALID",
+                str(reason or "Accounting could not be verified."),
+                "Investigate or restore verified evidence; automatic reset is forbidden.",
+            )
+        if paper.strategy.get("status") == "RECOVERY_REQUIRED":
+            return (
+                "RECOVERY_REQUIRED",
+                "A verified paper position survived a backend restart.",
+                "Use FLATTEN PAPER POSITIONS against fresh data, then RESUME PAPER.",
+            )
+        if paper.risk_halted:
+            reason = risk.get("state", "UNKNOWN") if isinstance(risk, dict) else "UNKNOWN"
+            return (
+                "RISK_HALT",
+                f"Risk halt: {reason}.",
+                "Review the risk event; limits remain enforced.",
+            )
+        fresh, _ = self._fresh(time.monotonic())
+        if not fresh or self._feed_error:
+            return (
+                "FEED_UNHEALTHY",
+                str(self._feed_error or "Market data is stale."),
+                "Check the network; feed retries continue automatically.",
+            )
+        if self._manual_paused:
+            return "MANUAL_PAUSE", "Entries were paused manually.", "Use RESUME PAPER when ready."
+        if not self._settings.strategy_enabled:
+            return (
+                "STRATEGY_DISABLED",
+                "Strategy is disabled in configuration.",
+                "Enable the PAPER strategy in config and restart.",
+            )
+        if self._integrity_halted:
+            return (
+                "READY",
+                "Startup checks passed; PAPER can resume.",
+                "Retry analysis if resume fails.",
+            )
+        return (
+            "HEALTHY",
+            "Safety checks pass; PAPER entries are enabled.",
+            "The strategy still waits for a qualified signal.",
+        )
 
     def flatten(self) -> bool:
         with self._lock:
             return self._paper.flatten()
+
+    def start_new_paper_run(self) -> dict[str, object]:
+        with self._lock:
+            now = time.monotonic()
+            fresh, _ = self._fresh(now)
+            paper = self._paper.snapshot()
+            diagnostics = paper.diagnostics
+            accounting = diagnostics.get("accounting", {})
+            risk = diagnostics.get("risk", {})
+            storage = diagnostics.get("storage", {})
+            config_path = self._config_path
+            paper_factory = self._paper_factory
+            allowed = (
+                self._report.mode == "PAPER"
+                and config_path is not None
+                and paper_factory is not None
+                and fresh
+                and not self._feed_error
+                and not self._execution_error
+                and paper.positions == 0
+                and paper.risk_halted
+                and isinstance(accounting, dict)
+                and accounting.get("state") == "VALID"
+                and isinstance(risk, dict)
+                and risk.get("state") == "MAX_DRAWDOWN"
+                and isinstance(storage, dict)
+                and storage.get("safe") is True
+            )
+            if not allowed:
+                raise RuntimeError(
+                    "new PAPER run requires a flat, reconciled MAX_DRAWDOWN halt with fresh data"
+                )
+            assert config_path is not None and paper_factory is not None
+
+            prior_run = diagnostics.get("run", {})
+            prior_run_id = (
+                str(prior_run.get("run_id", "UNKNOWN"))
+                if isinstance(prior_run, dict)
+                else "UNKNOWN"
+            )
+            metadata = create_new_run(
+                project_root=Path(__file__).resolve().parents[1],
+                config_path=config_path,
+                log_directory=self._settings.log_directory,
+                starting_equity=self._settings.starting_balance_usdt,
+            )
+            self._paper.close()
+            self._paper = paper_factory()
+            self._manual_paused = False
+            self._integrity_halted = True
+            self._execution_error = None
+            try:
+                self._paper.process(self._markets, entry_enabled=False)
+            except Exception as exc:
+                self._execution_error = str(exc)[:200]
+                self._paper.set_entry_enabled(False)
+                raise RuntimeError(
+                    f"new PAPER run created but initialization failed: {exc}"
+                ) from exc
+            if not self._resume_locked(now):
+                raise RuntimeError("new PAPER run created but safety checks did not permit startup")
+            self._recovery = {
+                "checked_at_utc": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+                "status": "FIXED",
+                "code": "NEW_PAPER_RUN",
+                "trigger": f"Archived MAX_DRAWDOWN run {prior_run_id}.",
+                "detail": (
+                    f"Started new PAPER run {metadata['run_id']} with configured risk limits."
+                ),
+                "checks": [
+                    "Prior account: FLAT and ACCOUNTING VALID",
+                    "Public market data: LIVE",
+                    "Storage: SAFE",
+                ],
+                "actions": ["Archived prior run and created a new PAPER ledger."],
+                "next_action": "The new strategy waits for a qualified signal.",
+            }
+            return metadata
 
     def close(self) -> None:
         self._tradingview.stop()
@@ -268,9 +485,7 @@ class DashboardState:
             diagnostics = paper.diagnostics
             accounting = diagnostics.get("accounting", {})
             accounting_state = (
-                accounting.get("state", "VALID")
-                if isinstance(accounting, dict)
-                else "INVALID"
+                accounting.get("state", "VALID") if isinstance(accounting, dict) else "INVALID"
             )
             if paper.risk_halted or self._execution_error:
                 self._integrity_halted = True
@@ -294,11 +509,15 @@ class DashboardState:
                 alerts.insert(0, f"Paper execution: {self._execution_error}")
 
             candidates = paper.strategy.get("candidates", [])
-            candidate_map = {
-                str(candidate["symbol"]): candidate
-                for candidate in candidates
-                if isinstance(candidate, dict) and "symbol" in candidate
-            } if isinstance(candidates, list) else {}
+            candidate_map = (
+                {
+                    str(candidate["symbol"]): candidate
+                    for candidate in candidates
+                    if isinstance(candidate, dict) and "symbol" in candidate
+                }
+                if isinstance(candidates, list)
+                else {}
+            )
             symbol_diagnostics = diagnostics.get("symbols", {})
             quarantined = (
                 symbol_diagnostics.get("quarantined", {})
@@ -308,9 +527,9 @@ class DashboardState:
             markets = [
                 {
                     **market,
-                    "signal_confidence": candidate_map.get(
-                        str(market.get("symbol")), {}
-                    ).get("confidence", 0.0),
+                    "signal_confidence": candidate_map.get(str(market.get("symbol")), {}).get(
+                        "confidence", 0.0
+                    ),
                     "signal_status": (
                         "QUARANTINED"
                         if str(market.get("symbol")) in quarantined
@@ -354,11 +573,17 @@ class DashboardState:
                     "AGREE" if tv_bias == primary_bias else "DISAGREE"
                 )
 
+            risk = diagnostics.get("risk", {})
+            daily_review = bool(
+                isinstance(risk, dict)
+                and risk.get("state") == "DAILY_LOSS_REVIEW"
+                and risk.get("rollover_review_required") is True
+            )
             resume_allowed = (
                 fresh
                 and not self._feed_error
                 and not self._execution_error
-                and not paper.risk_halted
+                and (not paper.risk_halted or daily_review)
                 and accounting_state == "VALID"
                 and trading_state != "ACTIVE"
             )
@@ -370,6 +595,21 @@ class DashboardState:
                     "Storage is below the safe persistence threshold; entries are blocked.",
                 )
                 resume_allowed = False
+
+            new_paper_run_allowed = bool(
+                self._config_path is not None
+                and self._paper_factory is not None
+                and fresh
+                and not self._feed_error
+                and not self._execution_error
+                and paper.positions == 0
+                and paper.risk_halted
+                and accounting_state == "VALID"
+                and isinstance(risk, dict)
+                and risk.get("state") == "MAX_DRAWDOWN"
+                and isinstance(storage, dict)
+                and storage.get("safe") is True
+            )
 
             return {
                 "mode": self._report.mode,
@@ -402,11 +642,15 @@ class DashboardState:
                 "markets": markets,
                 "active_symbols": selected,
                 "alerts": alerts,
+                "recovery": self._recovery,
                 "controls": {
                     "pause_allowed": trading_state == "ACTIVE",
                     "resume_allowed": resume_allowed,
-                    "auto_resume_allowed": resume_allowed and not self._manual_paused,
+                    "auto_resume_allowed": (
+                        resume_allowed and not self._manual_paused and not daily_review
+                    ),
                     "flatten_allowed": paper.positions > 0,
+                    "new_paper_run_allowed": new_paper_run_allowed,
                 },
             }
 
@@ -419,6 +663,7 @@ class GatePoller:
         self._price_increments: dict[str, str] | None = None
         self._stop = threading.Event()
         self._wake = threading.Event()
+        self._poll_lock = threading.Lock()
         self._thread = threading.Thread(target=self._run, name="gate-public-feed", daemon=True)
 
     def start(self) -> None:
@@ -434,6 +679,12 @@ class GatePoller:
 
     def _run(self) -> None:
         while not self._stop.is_set():
+            self.poll_once()
+            self._wake.wait(self._settings.market_poll_seconds)
+            self._wake.clear()
+
+    def poll_once(self) -> None:
+        with self._poll_lock:
             started = time.monotonic()
             try:
                 if self._price_increments is None:
@@ -451,8 +702,6 @@ class GatePoller:
             except Exception as exc:  # Network/parser boundary must fail closed.
                 self._state.apply_error(exc)
                 self._logger.warning("Gate public feed failed: %s", exc)
-            self._wake.wait(self._settings.market_poll_seconds)
-            self._wake.clear()
 
 
 class DashboardServer(ThreadingHTTPServer):
@@ -469,6 +718,7 @@ class DashboardServer(ThreadingHTTPServer):
         super().__init__(address, DashboardHandler)
         self.state = state
         self.poller = poller
+        self.repair_lock = threading.Lock()
         self.logger = logger
 
 
@@ -533,8 +783,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if length < 0 or length > 1024:
             self._json(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, {"error": "request too large"})
             return
-        if length:
-            self.rfile.read(length)
+        body = self.rfile.read(length) if length else b""
 
         if self.path == "/api/control/pause":
             self.server.state.pause()
@@ -547,10 +796,42 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 return
         elif self.path == "/api/control/restart-feed":
             self.server.poller.refresh()
+        elif self.path == "/api/control/analyze-repair":
+            if not self.server.repair_lock.acquire(blocking=False):
+                self._json(HTTPStatus.CONFLICT, {"error": "Analysis is already running."})
+                return
+            try:
+                before = self.server.state.snapshot()
+                trigger = f"{before['trading_state']}: {before['alerts']}"
+                self.server.poller.poll_once()
+                result = self.server.state.analyze_and_repair(trigger)
+                self.server.logger.info("Analyze & auto-fix: %s", json.dumps(result))
+            finally:
+                self.server.repair_lock.release()
         elif self.path == "/api/control/flatten":
-            if not self.server.state.flatten():
+            try:
+                flattened = self.server.state.flatten()
+            except (RuntimeError, ValueError, OSError) as exc:
+                self._json(HTTPStatus.CONFLICT, {"error": str(exc)[:200]})
+                return
+            if not flattened:
                 self._json(HTTPStatus.CONFLICT, {"error": "no paper position to flatten"})
                 return
+        elif self.path == "/api/control/new-paper-run":
+            try:
+                payload = json.loads(body or b"{}")
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                self._json(HTTPStatus.BAD_REQUEST, {"error": "invalid JSON"})
+                return
+            if not isinstance(payload, dict) or payload.get("confirm_new_run") is not True:
+                self._json(HTTPStatus.BAD_REQUEST, {"error": "explicit confirmation required"})
+                return
+            try:
+                metadata = self.server.state.start_new_paper_run()
+            except (RuntimeError, ValueError, OSError) as exc:
+                self._json(HTTPStatus.CONFLICT, {"error": str(exc)[:200]})
+                return
+            self.server.logger.info("Started new PAPER run: %s", metadata.get("run_id"))
         elif self.path == "/api/control/shutdown":
             self.server.state.pause()
             self._json(HTTPStatus.OK, self.server.state.snapshot())
@@ -581,12 +862,20 @@ def _logger(settings: Settings) -> logging.Logger:
     return logger
 
 
-def run_dashboard(settings: Settings) -> None:
+def run_dashboard(settings: Settings, config_path: Path | None = None) -> None:
     report = run_paper_smoke(settings)
     logger = _logger(settings)
     paper = PaperTrader(report, settings, logger)
     tradingview = build_tradingview_monitor(settings, logger)
-    state = DashboardState(report, settings, paper, tradingview)
+    resolved_config = (config_path or Path("config/paper.toml")).resolve()
+    state = DashboardState(
+        report,
+        settings,
+        paper,
+        tradingview,
+        config_path=resolved_config,
+        paper_factory=lambda: PaperTrader(report, settings, logger),
+    )
     poller = GatePoller(state, settings, logger)
     server = DashboardServer(
         (settings.dashboard_host, settings.dashboard_port), state, poller, logger

@@ -13,7 +13,14 @@ from typing import cast
 from unittest.mock import patch
 
 from autotrade.config import load_settings
-from autotrade.integrity import EventLedger, create_new_run, new_identity, utc_now
+from autotrade.integrity import (
+    EventLedger,
+    IntegrityError,
+    create_new_run,
+    new_identity,
+    scan_ledger,
+    utc_now,
+)
 from autotrade.paper import PaperTrader
 from autotrade.runtime import RuntimeReport
 
@@ -218,9 +225,7 @@ class PaperTraderTests(unittest.TestCase):
                 self.assertNotIn("BTC_USDT", quarantined)
 
                 trader.process(tournament_market(100.1, 200.2), entry_enabled=False)
-                recovered = cast(
-                    dict[str, object], trader.snapshot().diagnostics["symbols"]
-                )
+                recovered = cast(dict[str, object], trader.snapshot().diagnostics["symbols"])
                 self.assertEqual(recovered["quarantined"], {})
             finally:
                 trader.close()
@@ -379,6 +384,71 @@ class PaperTraderTests(unittest.TestCase):
                 flattened = recovered.snapshot()
                 self.assertFalse(flattened.risk_halted)
                 self.assertEqual(flattened.positions, 0)
+            finally:
+                recovered.close()
+
+    def test_split_fill_restart_reconciles_and_recheck_rejects_tampering(self) -> None:
+        report = RuntimeReport("PAPER", "test", "TESTER-001", "GATE", "300", "1", True, True)
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, SAFE_ENV):
+            settings = replace(
+                load_settings(),
+                log_directory=Path(directory),
+                strategy_window=3,
+                strategy_persistence_ticks=2,
+                strategy_regime_window=6,
+                strategy_entry_threshold_bps=Decimal("10"),
+                strategy_minimum_net_edge_bps=Decimal("1"),
+                strategy_minimum_confidence=Decimal("0.10"),
+                strategy_slippage_bps=Decimal("0"),
+            )
+            first = PaperTrader(report, settings, logging.getLogger("test.split-restart"))
+            try:
+                for price in (0.10000, 0.10010, 0.10020, 0.10030, 0.10040, 0.10055, 0.10070):
+                    first.process(low_price_market(price), entry_enabled=True)
+                self.assertEqual(first.snapshot().positions, 1)
+            finally:
+                first.close()
+            path = Path(directory) / "paper-state.json"
+            original = path.read_bytes()
+            checkpoint = json.loads(original)
+            events = [
+                json.loads(line)
+                for line in current_events_path(Path(directory)).read_text().splitlines()
+            ]
+            opened = next(event for event in events if event["event_type"] == "position_opened")
+            self.assertGreater(
+                Decimal(checkpoint["position"]["quantity"]), Decimal(opened["quantity"])
+            )
+            ledger_path = current_events_path(Path(directory))
+            ledger_original = ledger_path.read_bytes()
+            opened_quantity = opened["quantity"]
+            opened["quantity"] = "1"
+            ledger_path.write_text(
+                "\n".join(json.dumps(event) for event in events), encoding="utf-8"
+            )
+            with self.assertRaisesRegex(IntegrityError, "position open does not match"):
+                scan_ledger(ledger_path, checkpoint["run_id"])
+            opened["quantity"] = opened_quantity
+            fills = [event for event in events if event["event_type"] == "fill"]
+            fills[-1]["fill_id"] = fills[0]["fill_id"]
+            ledger_path.write_text(
+                "\n".join(json.dumps(event) for event in events), encoding="utf-8"
+            )
+            with self.assertRaisesRegex(IntegrityError, "duplicate fill_id"):
+                scan_ledger(ledger_path, checkpoint["run_id"])
+            ledger_path.write_bytes(ledger_original)
+            recovered = PaperTrader(report, settings, logging.getLogger("test.split-recovered"))
+            try:
+                self.assertEqual(recovered.snapshot().diagnostics["accounting"]["state"], "VALID")  # type: ignore[index]
+                self.assertTrue(recovered.recheck_integrity())
+                self.assertEqual(path.read_bytes(), original)
+                self.assertEqual(recovered.monitored_symbols, (checkpoint["position"]["symbol"],))
+                self.assertFalse(recovered.authorize_resume())
+                checkpoint["position"]["quantity"] = "100"
+                path.write_text(json.dumps(checkpoint), encoding="utf-8")
+                self.assertFalse(recovered.recheck_integrity())
+                self.assertFalse(recovered.flatten())
+                self.assertIn("quantity mismatch", str(recovered.snapshot().diagnostics))
             finally:
                 recovered.close()
 
@@ -871,6 +941,7 @@ class PaperTraderTests(unittest.TestCase):
                 {
                     "checkpoint_sequence": 9,
                     "last_event_sequence": ledger.last_sequence,
+                    "last_committed_event_sequence": ledger.last_sequence,
                     "balance_usdt": str(target_balance),
                     "cumulative_realized_pnl_usdt": str(target_realized),
                     "trades": 51,

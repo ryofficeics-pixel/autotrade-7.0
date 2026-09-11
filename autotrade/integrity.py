@@ -5,6 +5,8 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
@@ -18,6 +20,7 @@ ACCOUNTING_TOLERANCE: Final = Decimal("0.00000001")
 STRATEGY_VERSION: Final = "REST_MOMENTUM_TOURNAMENT_V2"
 EXECUTION_MODEL_VERSION: Final = "NAUTILUS_PAPER_REST_V2"
 MARKET_DATA_MODE: Final = "GATE_PUBLIC_REST"
+TRANSITION_PROTOCOL_VERSION: Final = 1
 
 EVENT_FIELDS: Final = (
     "schema_version",
@@ -124,6 +127,8 @@ REQUIRED_BY_EVENT: Final = {
         "reason",
     ),
     "state_reconciliation_failed": ("reason",),
+    "transition_intent": ("transition_id", "target_event_sequence"),
+    "transition_committed": ("transition_id", "target_event_sequence"),
 }
 
 
@@ -173,6 +178,11 @@ def validate_event(event: dict[str, object]) -> None:
                 UUID(str(value))
             except ValueError as exc:
                 raise IntegrityError(f"{field} is not a UUID") from exc
+    if event.get("transition_id") is not None:
+        try:
+            UUID(str(event["transition_id"]))
+        except ValueError as exc:
+            raise IntegrityError("transition_id is not a UUID") from exc
     try:
         timestamp = datetime.fromisoformat(str(event["timestamp_utc"]).replace("Z", "+00:00"))
     except ValueError as exc:
@@ -185,6 +195,16 @@ def validate_event(event: dict[str, object]) -> None:
     absent = [field for field in REQUIRED_BY_EVENT[event_type] if event.get(field) is None]
     if absent:
         raise IntegrityError(f"{event_type} is missing required values: {','.join(absent)}")
+    if event_type in {"transition_intent", "transition_committed"}:
+        try:
+            target = int(str(event["target_event_sequence"]))
+        except (TypeError, ValueError) as exc:
+            raise IntegrityError("target_event_sequence must be an integer") from exc
+        sequence = int(event["sequence"])
+        if (event_type == "transition_intent" and target <= sequence) or (
+            event_type == "transition_committed" and target != sequence
+        ):
+            raise IntegrityError("target_event_sequence is inconsistent with the marker")
     for field in ("quantity", "price", "fee_amount"):
         if event.get(field) is None:
             continue
@@ -206,7 +226,18 @@ class EventLedger:
         self.last_sequence = self.summary.last_sequence
 
     def append(self, event_type: str, **values: object) -> dict[str, object]:
-        sequence = self.last_sequence + 1
+        event = self.prepare(self.last_sequence + 1, event_type, values)
+        self.append_records((event,))
+        return event
+
+    def prepare(
+        self,
+        sequence: int,
+        event_type: str,
+        values: dict[str, object],
+        *,
+        timestamp_utc: str | None = None,
+    ) -> dict[str, object]:
         event: dict[str, object] = dict.fromkeys(EVENT_FIELDS)
         event.update(
             {
@@ -215,20 +246,263 @@ class EventLedger:
                 "sequence": sequence,
                 "run_id": self.run_id,
                 "session_id": self.session_id,
-                "timestamp_utc": utc_now(),
+                "timestamp_utc": timestamp_utc or utc_now(),
                 "event_type": event_type,
             }
         )
         event.update(values)
         validate_event(event)
+        return event
+
+    def append_records(
+        self,
+        records: Sequence[dict[str, object]],
+        *,
+        refresh: bool = True,
+    ) -> None:
+        if not records:
+            return
+        expected = self.last_sequence + 1
+        for record in records:
+            validate_event(record)
+            if record.get("run_id") != self.run_id or record.get("sequence") != expected:
+                raise IntegrityError("prepared event sequence or run identity is invalid")
+            expected += 1
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.path.open("a", encoding="utf-8") as file:
-            file.write(json.dumps(event, allow_nan=False, separators=(",", ":")) + "\n")
+            for record in records:
+                file.write(json.dumps(record, allow_nan=False, separators=(",", ":")) + "\n")
             file.flush()
             os.fsync(file.fileno())
-        self.last_sequence = sequence
+        self.last_sequence = expected - 1
+        if refresh:
+            self.summary = scan_ledger(self.path, self.run_id)
+
+    def preview(self, records: Sequence[dict[str, object]]) -> LedgerSummary:
+        if not records:
+            return self.summary
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=self.path.parent) as directory:
+            preview_path = Path(directory) / "events.jsonl"
+            with preview_path.open("wb") as preview:
+                if self.path.is_file():
+                    preview.write(self.path.read_bytes())
+                for record in records:
+                    preview.write(
+                        (json.dumps(record, allow_nan=False, separators=(",", ":")) + "\n").encode()
+                    )
+            return scan_ledger(preview_path, self.run_id)
+
+    def refresh(self) -> None:
         self.summary = scan_ledger(self.path, self.run_id)
-        return event
+        self.last_sequence = self.summary.last_sequence
+
+
+FailureInjector = Callable[[str], None]
+EventSpec = tuple[str, dict[str, object]]
+
+
+def commit_transition(
+    ledger: EventLedger,
+    state_path: Path,
+    checkpoint: dict[str, object],
+    event_specs: Sequence[EventSpec],
+    *,
+    failure_injector: FailureInjector | None = None,
+) -> list[dict[str, object]]:
+    if not event_specs:
+        _atomic_json(state_path, checkpoint)
+        return []
+    pending_path = _transition_path(state_path)
+    if pending_path.exists():
+        raise IntegrityError("a prior state transition requires recovery")
+    transition_id = str(
+        uuid5(
+            UUID(ledger.run_id),
+            f"transition:{ledger.last_sequence + 1}:{checkpoint.get('checkpoint_sequence')}",
+        )
+    )
+    timestamp = utc_now()
+    target_sequence = ledger.last_sequence + len(event_specs) + 2
+    records = [
+        ledger.prepare(
+            ledger.last_sequence + 1,
+            "transition_intent",
+            {
+                "transition_id": transition_id,
+                "target_event_sequence": target_sequence,
+                "reason": "FINANCIAL_STATE_MUTATION",
+            },
+            timestamp_utc=timestamp,
+        )
+    ]
+    for offset, (event_type, values) in enumerate(event_specs, 2):
+        records.append(
+            ledger.prepare(
+                ledger.last_sequence + offset,
+                event_type,
+                {**values, "transition_id": transition_id},
+                timestamp_utc=str(values.get("timestamp_utc") or timestamp),
+            )
+        )
+    records.append(
+        ledger.prepare(
+            target_sequence,
+            "transition_committed",
+            {
+                "transition_id": transition_id,
+                "target_event_sequence": target_sequence,
+                "reason": "FINANCIAL_STATE_MUTATION",
+            },
+            timestamp_utc=timestamp,
+        )
+    )
+    target_checkpoint = {
+        **checkpoint,
+        "last_event_sequence": target_sequence,
+        "last_committed_event_sequence": target_sequence,
+        "last_transition_id": transition_id,
+        "transition_protocol_version": TRANSITION_PROTOCOL_VERSION,
+    }
+    preview = ledger.preview(records)
+    reconcile_checkpoint(target_checkpoint, preview)
+    plan: dict[str, object] = {
+        "protocol_version": TRANSITION_PROTOCOL_VERSION,
+        "run_id": ledger.run_id,
+        "transition_id": transition_id,
+        "records": records,
+        "checkpoint": target_checkpoint,
+    }
+    plan["plan_hash"] = hashlib.sha256(_canonical_json(plan).encode()).hexdigest()
+    _atomic_json(pending_path, plan)
+    _inject(failure_injector, "before_event_append")
+    ledger.append_records(records[:-1], refresh=False)
+    _inject(failure_injector, "after_event_append")
+    _inject(failure_injector, "before_checkpoint_write")
+    _atomic_json_with_hook(state_path, target_checkpoint, failure_injector)
+    _inject(failure_injector, "after_atomic_rename")
+    _inject(failure_injector, "before_commit_marker")
+    ledger.append_records(records[-1:], refresh=False)
+    _inject(failure_injector, "after_commit_marker")
+    ledger.refresh()
+    reconcile_checkpoint(target_checkpoint, ledger.summary)
+    pending_path.unlink()
+    return records[1:-1]
+
+
+def recover_pending_transition(
+    state_path: Path,
+    ledger_path: Path,
+    run_id: str,
+) -> dict[str, object] | None:
+    pending_path = _transition_path(state_path)
+    if not pending_path.is_file():
+        return None
+    try:
+        plan = json.loads(pending_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise IntegrityError(f"pending transition is unreadable: {exc}") from exc
+    if not isinstance(plan, dict):
+        raise IntegrityError("pending transition is not an object")
+    plan_hash = plan.pop("plan_hash", None)
+    calculated = hashlib.sha256(_canonical_json(plan).encode()).hexdigest()
+    if plan_hash != calculated:
+        raise IntegrityError("pending transition hash mismatch")
+    if plan.get("protocol_version") != TRANSITION_PROTOCOL_VERSION or plan.get("run_id") != run_id:
+        raise IntegrityError("pending transition identity mismatch")
+    records = plan.get("records")
+    checkpoint = plan.get("checkpoint")
+    if not isinstance(records, list) or not records or not isinstance(checkpoint, dict):
+        raise IntegrityError("pending transition structure is invalid")
+    prepared = []
+    for record in records:
+        if not isinstance(record, dict):
+            raise IntegrityError("pending transition contains an invalid event")
+        validate_event(record)
+        prepared.append(record)
+    existing = _read_ledger_records(ledger_path)
+    start = int(str(prepared[0]["sequence"])) - 1
+    if len(existing) < start:
+        raise IntegrityError("ledger is behind the pending transition base")
+    suffix = existing[start:]
+    if len(suffix) > len(prepared) or suffix != prepared[: len(suffix)]:
+        raise IntegrityError("ledger diverges from the pending transition")
+    precommit_count = len(prepared) - 1
+    if len(suffix) < precommit_count:
+        _append_raw_records(ledger_path, prepared[len(suffix) : precommit_count])
+        suffix = prepared[:precommit_count]
+    _atomic_json(state_path, checkpoint)
+    if len(suffix) < len(prepared):
+        _append_raw_records(ledger_path, prepared[-1:])
+    summary = scan_ledger(ledger_path, run_id)
+    reconcile_checkpoint(checkpoint, summary)
+    recovered = {
+        **checkpoint,
+        "transition_recovery": {
+            "status": "REPLAYED_COMMIT",
+            "transition_id": plan.get("transition_id"),
+            "recovered_at_utc": utc_now(),
+        },
+    }
+    _atomic_json(state_path, recovered)
+    pending_path.unlink()
+    return recovered
+
+
+def _transition_path(state_path: Path) -> Path:
+    return state_path.with_suffix(state_path.suffix + ".transition")
+
+
+def _inject(injector: FailureInjector | None, boundary: str) -> None:
+    if injector is not None:
+        injector(boundary)
+
+
+def _atomic_json_with_hook(
+    path: Path,
+    value: dict[str, object],
+    injector: FailureInjector | None,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    with temporary.open("w", encoding="utf-8") as file:
+        json.dump(value, file, allow_nan=False, separators=(",", ":"))
+        file.flush()
+        os.fsync(file.fileno())
+        _inject(injector, "during_temporary_checkpoint_write")
+    temporary.replace(path)
+
+
+def _read_ledger_records(path: Path) -> list[dict[str, object]]:
+    if not path.is_file():
+        return []
+    records: list[dict[str, object]] = []
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        raise IntegrityError(f"event ledger cannot be read: {exc}") from exc
+    for line_number, line in enumerate(lines, 1):
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise IntegrityError(f"event ledger line {line_number} is invalid JSON") from exc
+        if not isinstance(record, dict):
+            raise IntegrityError(f"event ledger line {line_number} is not an object")
+        records.append(record)
+    return records
+
+
+def _append_raw_records(path: Path, records: Sequence[dict[str, object]]) -> None:
+    if not records:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as file:
+        for record in records:
+            file.write(json.dumps(record, allow_nan=False, separators=(",", ":")) + "\n")
+        file.flush()
+        os.fsync(file.fileno())
 
 
 def scan_ledger(path: Path, expected_run_id: str) -> LedgerSummary:
@@ -244,6 +518,12 @@ def scan_ledger(path: Path, expected_run_id: str) -> LedgerSummary:
     positions: dict[str, dict[str, object]] = {}
     signals: set[str] = set()
     orders: dict[str, str | None] = {}
+    entry_orders: dict[str, Decimal] = {}
+    entry_fills: dict[str, list[dict[str, object]]] = {}
+    exit_fills: set[str] = set()
+    fill_ids: set[str] = set()
+    active_transition: tuple[str, int] | None = None
+    committed_transitions: set[str] = set()
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except OSError as exc:
@@ -273,10 +553,32 @@ def scan_ledger(path: Path, expected_run_id: str) -> LedgerSummary:
         last_sequence = sequence
         event_count += 1
         event_type = str(event["event_type"])
-        signal_id = str(event["signal_id"]) if event.get("signal_id") is not None else None
-        position_id = (
-            str(event["position_id"]) if event.get("position_id") is not None else None
+        transition_id = (
+            str(event["transition_id"]) if event.get("transition_id") is not None else None
         )
+        if event_type == "transition_intent":
+            target = int(str(event["target_event_sequence"]))
+            if active_transition is not None or target <= sequence:
+                raise IntegrityError(f"invalid transition intent at line {line_number}")
+            if transition_id in committed_transitions:
+                raise IntegrityError(f"duplicate transition_id at line {line_number}")
+            assert transition_id is not None
+            active_transition = (transition_id, target)
+            continue
+        if event_type == "transition_committed":
+            target = int(str(event["target_event_sequence"]))
+            if active_transition != (transition_id, target) or target != sequence:
+                raise IntegrityError(f"invalid transition commit at line {line_number}")
+            assert transition_id is not None
+            committed_transitions.add(transition_id)
+            active_transition = None
+            continue
+        if transition_id is not None and (
+            active_transition is None or active_transition[0] != transition_id
+        ):
+            raise IntegrityError(f"event has no matching transition at line {line_number}")
+        signal_id = str(event["signal_id"]) if event.get("signal_id") is not None else None
+        position_id = str(event["position_id"]) if event.get("position_id") is not None else None
         order_id = str(event["order_id"]) if event.get("order_id") is not None else None
         if event_type == "signal":
             assert signal_id is not None
@@ -287,13 +589,35 @@ def scan_ledger(path: Path, expected_run_id: str) -> LedgerSummary:
             if signal_id not in signals or order_id is None:
                 raise IntegrityError(f"orphan entry order at line {line_number}")
             orders[order_id] = signal_id
+            entry_orders[order_id] = _event_decimal(event, "quantity")
         elif event_type == "fill":
             if order_id not in orders or orders[order_id] != signal_id:
                 raise IntegrityError(f"orphan fill at line {line_number}")
+            fill_id = str(event["fill_id"])
+            if fill_id in fill_ids:
+                raise IntegrityError(f"duplicate fill_id at line {line_number}")
+            fill_ids.add(fill_id)
+            assert position_id is not None
+            if order_id in entry_orders:
+                entry_orders[order_id] -= _event_decimal(event, "quantity")
+                if entry_orders[order_id] < 0:
+                    raise IntegrityError(f"entry fills exceed order quantity at line {line_number}")
+                entry_fills.setdefault(position_id, []).append(event)
+            else:
+                exit_fills.add(position_id)
             fees += _event_decimal(event, "fee_amount")
         elif event_type == "position_opened":
             if signal_id not in signals or position_id is None or position_id in positions:
                 raise IntegrityError(f"invalid position open at line {line_number}")
+            quantity, notional, _ = _entry_totals(entry_fills.get(position_id, []))
+            if (
+                quantity <= 0
+                or abs(_event_decimal(event, "quantity") - quantity) > ACCOUNTING_TOLERANCE
+                or abs(_event_decimal(event, "price") - notional / quantity) > ACCOUNTING_TOLERANCE
+            ):
+                raise IntegrityError(
+                    f"position open does not match its fills at line {line_number}"
+                )
             positions[position_id] = event
         elif event_type == "exit_signal":
             if position_id not in positions or order_id is None:
@@ -308,6 +632,31 @@ def scan_ledger(path: Path, expected_run_id: str) -> LedgerSummary:
                 fees += _event_decimal(event, "fee_amount")
             if position_id is not None:
                 positions.pop(position_id, None)
+    if active_transition is not None:
+        raise IntegrityError("event ledger ends with an incomplete transition")
+    for position_id, position in positions.items():
+        fills = entry_fills.get(position_id, [])
+        if not fills:
+            raise IntegrityError("open position has no attributed entry fills")
+        expected_side = {"LONG": {"1", "BUY"}, "SHORT": {"2", "SELL"}}.get(
+            str(position["side"]), set()
+        )
+        if any(
+            fill["symbol"] != position["symbol"]
+            or fill["signal_id"] != position["signal_id"]
+            or fill["side"] not in expected_side
+            or fill["fee_currency"] != "USDT"
+            for fill in fills
+        ):
+            raise IntegrityError("open position entry-fill identity mismatch")
+        quantity, notional, entry_fee = _entry_totals(fills)
+        positions[position_id] = {
+            **position,
+            "exit_pending": position_id in exit_fills,
+            "quantity": str(quantity),
+            "price": str(notional / quantity),
+            "entry_fee_usdt": str(entry_fee),
+        }
     return LedgerSummary(
         last_sequence,
         event_count,
@@ -319,6 +668,16 @@ def scan_ledger(path: Path, expected_run_id: str) -> LedgerSummary:
     )
 
 
+def _entry_totals(fills: list[dict[str, object]]) -> tuple[Decimal, Decimal, Decimal]:
+    quantity = sum((_event_decimal(fill, "quantity") for fill in fills), Decimal(0))
+    notional = sum(
+        (_event_decimal(fill, "quantity") * _event_decimal(fill, "price") for fill in fills),
+        Decimal(0),
+    )
+    fees = sum((_event_decimal(fill, "fee_amount") for fill in fills), Decimal(0))
+    return quantity, notional, fees
+
+
 def reconcile_checkpoint(state: dict[str, object], summary: LedgerSummary) -> None:
     if int(str(state.get("schema_version", 0))) != CHECKPOINT_SCHEMA_VERSION:
         raise IntegrityError("checkpoint is legacy/unattributed; create a new run explicitly")
@@ -326,6 +685,10 @@ def reconcile_checkpoint(state: dict[str, object], summary: LedgerSummary) -> No
         raise IntegrityError("checkpoint mode is not PAPER")
     if int(str(state.get("last_event_sequence", -1))) != summary.last_sequence:
         raise IntegrityError("checkpoint/event sequence mismatch")
+    if int(str(state.get("last_committed_event_sequence", summary.last_sequence))) != (
+        summary.last_sequence
+    ):
+        raise IntegrityError("checkpoint committed-event sequence mismatch")
     starting = _state_decimal(state, "starting_equity_usdt")
     balance = _state_decimal(state, "balance_usdt")
     persisted_fees = _state_decimal(state, "fees_usdt")
@@ -334,9 +697,7 @@ def reconcile_checkpoint(state: dict[str, object], summary: LedgerSummary) -> No
         raise IntegrityError("checkpoint/ledger realized PnL mismatch")
     position = state.get("position")
     open_entry_fee = (
-        _state_decimal(position, "entry_fee_usdt")
-        if isinstance(position, dict)
-        else Decimal(0)
+        _state_decimal(position, "entry_fee_usdt") if isinstance(position, dict) else Decimal(0)
     )
     if abs(balance - (starting + summary.realized_pnl - open_entry_fee)) > ACCOUNTING_TOLERANCE:
         raise IntegrityError("checkpoint/ledger equity mismatch")
@@ -353,19 +714,31 @@ def reconcile_checkpoint(state: dict[str, object], summary: LedgerSummary) -> No
         if position_id is None or set(summary.open_positions) != {str(position_id)}:
             raise IntegrityError("checkpoint/ledger position identity mismatch")
         ledger_position = summary.open_positions[str(position_id)]
+        if ledger_position.get("exit_pending"):
+            raise IntegrityError("open position has incomplete exit fills; recovery required")
         if position.get("symbol") != ledger_position.get("symbol"):
             raise IntegrityError("checkpoint/ledger position symbol mismatch")
         if position.get("side") != ledger_position.get("side"):
             raise IntegrityError("checkpoint/ledger position side mismatch")
-        if abs(
-            _state_decimal(position, "quantity")
-            - _state_decimal(ledger_position, "quantity")
-        ) > ACCOUNTING_TOLERANCE:
+        if position.get("signal_id") != ledger_position.get("signal_id"):
+            raise IntegrityError("checkpoint/ledger position signal mismatch")
+        if (
+            abs(
+                _state_decimal(position, "entry_fee_usdt")
+                - _state_decimal(ledger_position, "entry_fee_usdt")
+            )
+            > ACCOUNTING_TOLERANCE
+        ):
+            raise IntegrityError("checkpoint/ledger position entry fee mismatch")
+        if (
+            abs(_state_decimal(position, "quantity") - _state_decimal(ledger_position, "quantity"))
+            > ACCOUNTING_TOLERANCE
+        ):
             raise IntegrityError("checkpoint/ledger position quantity mismatch")
-        if abs(
-            _state_decimal(position, "entry_price")
-            - _state_decimal(ledger_position, "price")
-        ) > ACCOUNTING_TOLERANCE:
+        if (
+            abs(_state_decimal(position, "entry_price") - _state_decimal(ledger_position, "price"))
+            > ACCOUNTING_TOLERANCE
+        ):
             raise IntegrityError("checkpoint/ledger position price mismatch")
 
 
@@ -390,16 +763,20 @@ def create_new_run(
         "config_hash": hashlib.sha256(config_path.read_bytes()).hexdigest(),
         "strategy_version": STRATEGY_VERSION,
         "event_schema_version": EVENT_SCHEMA_VERSION,
+        "transition_protocol_version": TRANSITION_PROTOCOL_VERSION,
         "market_data_mode": MARKET_DATA_MODE,
         "execution_model_version": EXECUTION_MODEL_VERSION,
     }
     _atomic_json(run_root / "metadata.json", metadata)
     events_path = run_root / "events.jsonl"
     events_path.touch(exist_ok=False)
-    state = {
+    state: dict[str, object] = {
         "schema_version": CHECKPOINT_SCHEMA_VERSION,
         "checkpoint_sequence": 0,
         "last_event_sequence": 0,
+        "last_committed_event_sequence": 0,
+        "last_transition_id": None,
+        "transition_protocol_version": TRANSITION_PROTOCOL_VERSION,
         "run_id": run_id,
         "session_id": created_session_id,
         "event_ledger_path": str(events_path.relative_to(project_root)),
@@ -445,6 +822,16 @@ def _atomic_json(path: Path, value: dict[str, object]) -> None:
         file.flush()
         os.fsync(file.fileno())
     temporary.replace(path)
+
+
+def _canonical_json(value: object) -> str:
+    return json.dumps(
+        value,
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
 
 
 def _git_commit(project_root: Path) -> str:

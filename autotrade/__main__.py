@@ -39,7 +39,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 raise ConfigError("--port must be between 1024 and 65535")
             settings = replace(settings, dashboard_port=arguments.port)
         if arguments.command == "dashboard":
-            run_dashboard(settings)
+            run_dashboard(settings, arguments.config)
             return 0
         if arguments.command == "capture":
             symbols = _capture_symbols(arguments.symbols, settings)

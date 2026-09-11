@@ -3,6 +3,8 @@
 const $ = (id) => document.getElementById(id);
 const money = new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const compact = new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 });
+let controlPending = false;
+let haltTiming = null;
 
 function text(id, value) { $(id).textContent = value; }
 function signed(value, digits = 2) { return `${value >= 0 ? "+" : ""}${value.toFixed(digits)}`; }
@@ -13,6 +15,31 @@ function price(value) {
 function status(element, label, state) {
   element.textContent = label;
   element.className = `status ${state}`;
+}
+
+function renderHaltTiming() {
+  const element = $("halt-timer");
+  if (!haltTiming) {
+    element.hidden = true;
+    return;
+  }
+  element.hidden = false;
+  if (haltTiming.riskState !== "DAILY_LOSS") {
+    element.textContent = haltTiming.riskState === "MAX_DRAWDOWN"
+      ? "NO COUNTDOWN · MAX DRAWDOWN DOES NOT EXPIRE · MANUAL REVIEW REQUIRED"
+      : `NO AUTOMATIC LIFT · ${haltTiming.riskState.replaceAll("_", " ")} · MANUAL REVIEW REQUIRED`;
+    return;
+  }
+  const remaining = haltTiming.reviewAt - Date.now();
+  if (!Number.isFinite(remaining) || remaining <= 0) {
+    element.textContent = "UTC RISK WINDOW ENDED · MANUAL REVIEW REQUIRED · NO AUTOMATIC RESUME";
+    return;
+  }
+  const seconds = Math.ceil(remaining / 1000);
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const remainder = seconds % 60;
+  element.textContent = `MANUAL REVIEW ELIGIBLE IN ${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(remainder).padStart(2, "0")} · NO AUTOMATIC RESUME`;
 }
 
 function cell(row, value, className = "") {
@@ -123,6 +150,15 @@ function render(state) {
   text("latency", state.data.latency_ms === null ? "— ms" : `${state.data.latency_ms} ms`);
   text("trading-state", state.trading_state);
   text("state-detail", state.trading_state === "ACTIVE" ? "Paper strategy and market screening are active." : accountingValid ? "New paper entries are blocked." : "New entries are blocked by accounting integrity.");
+  const riskState = state.risk?.state || "UNKNOWN";
+  const riskDay = state.risk?.risk_day_utc;
+  haltTiming = state.trading_state === "HALTED" && riskState !== "OK" ? {
+    riskState,
+    reviewAt: riskState === "DAILY_LOSS" && /^\d{4}-\d{2}-\d{2}$/.test(riskDay || "")
+      ? Date.parse(`${riskDay}T00:00:00Z`) + 86_400_000
+      : NaN,
+  } : null;
+  renderHaltTiming();
   text("equity", `$${money.format(state.portfolio.equity_usdt)}`);
   text("pnl", `$${money.format(state.portfolio.daily_pnl_usdt)}`);
   text("drawdown", `${state.portfolio.drawdown_pct.toFixed(2)}%`);
@@ -155,6 +191,23 @@ function render(state) {
   $("pause-button").disabled = !state.controls.pause_allowed;
   $("resume-button").disabled = !state.controls.resume_allowed;
   $("flatten-button").disabled = !state.controls.flatten_allowed;
+  $("new-run-button").disabled = !state.controls.new_paper_run_allowed;
+  $("restart-button").disabled = controlPending;
+  $("analyze-button").disabled = controlPending;
+  if (state.recovery) {
+    const recovery = state.recovery;
+    text("recovery-status", `ANALYSIS ${recovery.status} · ${new Date(recovery.checked_at_utc).toLocaleTimeString()}`);
+    text("recovery-detail", recovery.detail);
+    text("recovery-trigger", `Detected: ${recovery.trigger}`);
+    $("recovery-trigger").hidden = false;
+    $("recovery-checks").replaceChildren(...[...recovery.checks, ...recovery.actions].map((message) => {
+      const item = document.createElement("li");
+      item.textContent = message;
+      return item;
+    }));
+    text("recovery-next", recovery.next_action);
+  }
+  if (controlPending) for (const button of document.querySelectorAll("button")) button.disabled = true;
   $("connection-banner").hidden = true;
   renderTradingView(state.tradingview);
   renderMarkets(state.markets);
@@ -175,18 +228,24 @@ function disconnected() {
   status($("data-status"), "DATA UNKNOWN", "bad");
   text("trading-state", "UNKNOWN");
   text("state-detail", "Backend state unavailable. Controls are disabled.");
+  haltTiming = null;
+  renderHaltTiming();
   $("accounting-banner").className = "integrity-banner invalid";
   text("accounting-state", "ACCOUNTING UNKNOWN");
   text("accounting-detail", "Backend unavailable; accounting cannot be verified and Resume is disabled.");
   $("pause-button").disabled = true;
   $("resume-button").disabled = true;
   $("flatten-button").disabled = true;
+  $("new-run-button").disabled = true;
+  $("restart-button").disabled = true;
+  $("analyze-button").disabled = true;
   $("connection-banner").hidden = false;
   renderTradingView({ status: "UNAVAILABLE", error: "Backend state unavailable." });
   renderTradeHistory([]);
 }
 
 async function refresh() {
+  if (controlPending) return;
   try {
     const response = await fetch("/api/state", { cache: "no-store" });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -196,14 +255,34 @@ async function refresh() {
   }
 }
 
-async function control(action) {
+async function control(action, payload = {}) {
+  if (controlPending) return;
+  controlPending = true;
+  $("control-feedback").hidden = true;
+  if (action === "analyze-repair") {
+    text("analyze-button", "ANALYZING…");
+    $("recovery-panel").setAttribute("aria-busy", "true");
+  }
   for (const button of document.querySelectorAll("button")) button.disabled = true;
   try {
-    const response = await fetch(`/api/control/${action}`, { method: "POST" });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    render(await response.json());
-  } catch {
+    const response = await fetch(`/api/control/${action}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+    controlPending = false;
+    render(result);
+  } catch (error) {
+    controlPending = false;
+    text("control-feedback", `Action failed: ${error.message}. Check the current state before retrying.`);
+    $("control-feedback").hidden = false;
     await refresh();
+  } finally {
+    controlPending = false;
+    text("analyze-button", "ANALYZE & AUTO-FIX");
+    $("recovery-panel").removeAttribute("aria-busy");
   }
 }
 
@@ -211,5 +290,12 @@ $("pause-button").addEventListener("click", () => control("pause"));
 $("resume-button").addEventListener("click", () => control("resume"));
 $("flatten-button").addEventListener("click", () => control("flatten"));
 $("restart-button").addEventListener("click", () => control("restart-feed"));
+$("analyze-button").addEventListener("click", () => control("analyze-repair"));
+$("new-run-button").addEventListener("click", () => {
+  if (window.confirm("Archive this halted run and start a new $300 PAPER experiment?")) {
+    control("new-paper-run", { confirm_new_run: true });
+  }
+});
 refresh();
 setInterval(refresh, 5000);
+setInterval(renderHaltTiming, 1000);
