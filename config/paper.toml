@@ -42,6 +42,8 @@ max_drawdown_pct = "3"
 
 [paper_strategy.entry_v3]
 enabled = true
+shadow_enabled = true
+execution_enabled = false
 feature_window_events = 256
 feature_window_ms = 5000
 minimum_events = 12

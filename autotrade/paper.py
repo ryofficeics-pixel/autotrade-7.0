@@ -55,6 +55,7 @@ SAFETY_BUFFER_BPS = 3.0
 TRADE_HISTORY_HOURS = 48
 STATE_SCHEMA_VERSION = CHECKPOINT_SCHEMA_VERSION
 MIN_FREE_DISK_BYTES = 1_000_000_000
+BASELINE_EXECUTION_ENABLED = False
 
 
 class QuoteValidationError(ValueError):
@@ -495,6 +496,7 @@ class PaperTrader:
             and self._settings.strategy_enabled
             and not self._risk_halted
             and self._accounting_state == "VALID"
+            and BASELINE_EXECUTION_ENABLED
         )
         quotes: list[QuoteTick] = []
         for symbol, strategy in self._strategies.items():

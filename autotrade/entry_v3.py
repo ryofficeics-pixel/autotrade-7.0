@@ -8,6 +8,7 @@ import os
 import statistics
 import subprocess
 import tempfile
+import threading
 import time
 from collections import Counter, defaultdict, deque
 from collections.abc import Callable, Iterable, Iterator, Sequence
@@ -1928,6 +1929,119 @@ def run_live_shadow(
     }
     _atomic_json(settings.log_directory / "entry-v3-status.json", result)
     return result
+
+
+class LiveEntryV3Shadow:
+    """Consumes the captured Gate stream and persists V3 decisions without orders."""
+
+    def __init__(
+        self,
+        settings: Settings,
+        symbols: Sequence[str],
+        output_root: Path,
+        status_sink: Callable[[dict[str, object]], None] | None = None,
+    ) -> None:
+        if settings.mode != "PAPER" or settings.live_trading_enabled:
+            raise RuntimeError("Entry V3 shadow requires PAPER mode with live trading disabled")
+        if settings.entry_v3.execution_enabled:
+            raise RuntimeError("Entry V3 execution is forbidden in PAPER shadow mode")
+        config_hash = _file_hash(DEFAULT_CONFIG_PATH)
+        code_hash = _code_hash(DEFAULT_CONFIG_PATH.parent.parent)
+        self.recorder = RawEventRecorder(
+            output_root,
+            symbols,
+            code_revision=code_hash,
+            config_revision=config_hash,
+        )
+        self.symbols = tuple(symbols)
+        identity = {
+            "stream_id": self.recorder.dataset_id,
+            "config_hash": config_hash,
+            "working_tree_code_hash": code_hash,
+            "strategy_version": ENTRY_V3_STRATEGY_VERSION,
+            "feature_schema_version": FEATURE_SCHEMA_VERSION,
+            "execution_model_version": LIVE_EXECUTION_MODEL_VERSION,
+        }
+        self.experiment_id = hashlib.sha256(_canonical_json(identity).encode()).hexdigest()[:24]
+        self.normalizer = MarketEventNormalizer(
+            self.recorder.dataset_id,
+            book_depth=settings.entry_v3.book_depth,
+        )
+        self.strategy = EntryV3Strategy(settings, self.experiment_id)
+        self._lock = threading.Lock()
+        self._started_utc = _utc_now()
+        self._last_event_utc: str | None = None
+        self._error: str | None = None
+        self._complete = False
+        self._evidence_path = self.recorder.path / "entry-v3-events.jsonl"
+        self._status_sink = status_sink
+
+    def consume(self, record: dict[str, object]) -> None:
+        decisions: list[dict[str, object]] = []
+        with self._lock:
+            for event in self.normalizer.normalize(record):
+                self._last_event_utc = _utc_now()
+                decisions.extend(self.strategy.process(event))
+            if decisions:
+                with self._evidence_path.open("a", encoding="utf-8") as evidence:
+                    for decision in decisions:
+                        evidence.write(
+                            _canonical_json(
+                                {
+                                    **decision,
+                                    "source_event_hash": record.get("event_hash"),
+                                    "dataset_id": self.recorder.dataset_id,
+                                }
+                            )
+                            + "\n"
+                        )
+                    evidence.flush()
+                    os.fsync(evidence.fileno())
+        if self._status_sink is not None:
+            self._status_sink(self.status())
+
+    def run(self, duration_seconds: int = 86_400) -> Path:
+        try:
+            return asyncio.run(
+                GateMarketCapture(self.symbols, self.recorder, event_sink=self.consume).run(
+                    duration_seconds
+                )
+            )
+        except Exception as exc:
+            with self._lock:
+                self._error = str(exc)[:300]
+            raise
+        finally:
+            with self._lock:
+                self._complete = self._error is None
+
+    def status(self) -> dict[str, object]:
+        with self._lock:
+            diagnostics = self.strategy.diagnostics()
+            candidates = [
+                event
+                for event in self.strategy.events
+                if event.get("event_type") == "entry_candidate"
+            ]
+            latest = candidates[-1] if candidates else None
+            return {
+                "status": "FAILED" if self._error else ("COMPLETE" if self._complete else "LIVE"),
+                "strategy_status": "SHADOW",
+                "strategy_version": ENTRY_V3_STRATEGY_VERSION,
+                "execution_enabled": False,
+                "dataset_id": self.recorder.dataset_id,
+                "dataset_path": str(self.recorder.path),
+                "evidence_path": str(self._evidence_path),
+                "started_utc": self._started_utc,
+                "last_event_utc": self._last_event_utc,
+                "error": self._error,
+                "normalizer": dict(sorted(self.normalizer.counters.items())),
+                "diagnostics": diagnostics,
+                "candidate_count": len(candidates),
+                "accepted_count": sum(item.get("decision") == "ACCEPTED" for item in candidates),
+                "rejected_count": sum(item.get("decision") == "REJECTED" for item in candidates),
+                "latest_candidate": latest,
+            }
 
 
 def write_replay_comparison(

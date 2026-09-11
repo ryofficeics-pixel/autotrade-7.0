@@ -17,6 +17,7 @@ test("paper dashboard is truthful and controls fail closed", async ({ page }) =>
     trade_history: [{ closed_at: "2026-08-27T00:58:00Z", symbol: "ETH_USDT", side: "LONG", quantity: 0.01, open_price: 2480.5, close_price: 2490.5, realized_pnl_usdt: 0.08, pnl_pct: 0.3225, fee_usdt: 0.025, reason: "TAKE_PROFIT" }],
     orders: 0,
     strategy: { name: "REST Momentum", symbol: "ETH_USDT", status: "PAUSED", armed: false, expected_gross_bps: 0, expected_cost_bps: 0, expected_net_bps: 0, last_signal: null },
+    entry_v3: { status: "LIVE", strategy_status: "SHADOW", execution_enabled: false, candidate_count: 3, accepted_count: 1, rejected_count: 2, latest_candidate: { decision: "REJECTED", direction: "LONG" } },
     tradingview: { enabled: false, status: "DISABLED", advisory_only: true, execution_influence: "NONE", symbol: null, expected_symbol: "GATE:ETHUSDT.P", timeframe: null, expected_timeframe: "5", bias: "UNAVAILABLE", confidence: null, regime: "UNAVAILABLE", latency_ms: null, freshness_ms: null, pine_signal: "UNAVAILABLE", nautilus_agreement: "UNAVAILABLE", error: null },
     markets: [
       { symbol: "BTC_USDT", last: 78713.6, change_pct: -0.08, bid: 78702.7, ask: 78702.8, spread_bps: 0.013, volume_quote: 29360000000, funding_rate: -0.000007, screen_score: 62.4, selected: true, rejection: null },
@@ -73,7 +74,7 @@ test("paper dashboard is truthful and controls fail closed", async ({ page }) =>
 
   await page.getByRole("button", { name: "RESUME PAPER" }).click();
   await expect(page.locator("#trading-state")).toHaveText("ACTIVE");
-  await expect(page.locator("#strategy-badge")).toHaveText("ARMED");
+  await expect(page.locator("#strategy-badge")).toHaveText("V3 SHADOW");
   await page.getByRole("button", { name: "PAUSE NEW ENTRIES" }).click();
   await expect(page.locator("#trading-state")).toHaveText("PAUSED");
 

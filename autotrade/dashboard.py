@@ -16,6 +16,7 @@ from pathlib import Path
 from urllib.request import Request, urlopen
 
 from autotrade.config import Settings
+from autotrade.entry_v3 import LiveEntryV3Shadow
 from autotrade.integrity import create_new_run
 from autotrade.paper import PaperTrader
 from autotrade.runtime import RuntimeReport, run_paper_smoke
@@ -190,6 +191,14 @@ class DashboardState:
         self._manual_paused = False
         self._integrity_halted = True
         self._recovery: dict[str, object] | None = None
+        self._entry_v3: dict[str, object] = {
+            "status": "DISABLED",
+            "strategy_status": "SHADOW",
+            "execution_enabled": False,
+            "candidate_count": 0,
+            "accepted_count": 0,
+            "rejected_count": 0,
+        }
 
     @property
     def monitored_symbols(self) -> tuple[str, ...]:
@@ -226,6 +235,10 @@ class DashboardState:
         with self._lock:
             self._feed_error = str(error)[:200]
             self._paper.set_entry_enabled(False)
+
+    def set_entry_v3_status(self, status: dict[str, object]) -> None:
+        with self._lock:
+            self._entry_v3 = dict(status)
 
     def _fresh(self, now: float) -> tuple[bool, float | None]:
         if self._last_success_monotonic is None:
@@ -633,6 +646,7 @@ class DashboardState:
                 "trade_history": paper.trade_history,
                 "orders": paper.orders,
                 "strategy": paper.strategy,
+                "entry_v3": dict(self._entry_v3),
                 "accounting": accounting,
                 "risk": diagnostics.get("risk", {}),
                 "execution_model": diagnostics.get("execution_model", {}),
@@ -702,6 +716,44 @@ class GatePoller:
             except Exception as exc:  # Network/parser boundary must fail closed.
                 self._state.apply_error(exc)
                 self._logger.warning("Gate public feed failed: %s", exc)
+
+
+class EntryV3ShadowRunner:
+    def __init__(self, state: DashboardState, settings: Settings, logger: logging.Logger) -> None:
+        self._state = state
+        self._settings = settings
+        self._logger = logger
+        self._shadow: LiveEntryV3Shadow | None = None
+        self._thread: threading.Thread | None = None
+
+    def start(self, symbols: tuple[str, ...]) -> None:
+        if not self._settings.entry_v3.enabled or not self._settings.entry_v3.shadow_enabled:
+            return
+        if not symbols:
+            self._state.set_entry_v3_status({"status": "BLOCKED", "error": "No monitored symbols."})
+            return
+        self._shadow = LiveEntryV3Shadow(
+            self._settings,
+            symbols,
+            self._settings.log_directory / "entry-v3-captures",
+            self._state.set_entry_v3_status,
+        )
+        self._state.set_entry_v3_status(self._shadow.status())
+        self._thread = threading.Thread(target=self._run, name="entry-v3-shadow", daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        if self._thread is not None:
+            self._thread.join(timeout=5)
+
+    def _run(self) -> None:
+        assert self._shadow is not None
+        try:
+            self._shadow.run()
+        except Exception as exc:
+            self._logger.warning("Entry V3 shadow stopped: %s", exc)
+        finally:
+            self._state.set_entry_v3_status(self._shadow.status())
 
 
 class DashboardServer(ThreadingHTTPServer):
@@ -881,6 +933,9 @@ def run_dashboard(settings: Settings, config_path: Path | None = None) -> None:
         (settings.dashboard_host, settings.dashboard_port), state, poller, logger
     )
     tradingview.start()
+    poller.poll_once()
+    shadow = EntryV3ShadowRunner(state, settings, logger)
+    shadow.start(state.monitored_symbols)
     poller.start()
     logger.info("Dashboard started on http://%s:%s", *server.server_address)
     print(
@@ -890,6 +945,7 @@ def run_dashboard(settings: Settings, config_path: Path | None = None) -> None:
     try:
         server.serve_forever(poll_interval=0.5)
     finally:
+        shadow.stop()
         poller.stop()
         state.close()
         server.server_close()

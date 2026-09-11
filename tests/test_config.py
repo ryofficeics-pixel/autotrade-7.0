@@ -86,6 +86,13 @@ class SettingsTests(unittest.TestCase):
         self.assertFalse(settings.tradingview_enabled)
         self.assertEqual(settings.tradingview_confirmation_mode, "borderline")
         self.assertEqual(str(settings.tradingview_weight), "0.20")
+        self.assertTrue(settings.entry_v3.enabled)
+        self.assertTrue(settings.entry_v3.shadow_enabled)
+        self.assertFalse(settings.entry_v3.execution_enabled)
+
+    def test_entry_v3_execution_is_rejected(self) -> None:
+        with self.assertRaisesRegex(ConfigError, "execution_enabled must remain false"):
+            self.load(BASE_CONFIG + '\n[paper_strategy.entry_v3]\nexecution_enabled = true\n')
 
     def test_strategy_edge_must_cover_fees_and_slippage(self) -> None:
         with self.assertRaisesRegex(ConfigError, "must cover fees and slippage"):

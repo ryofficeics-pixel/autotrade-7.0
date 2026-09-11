@@ -19,6 +19,8 @@ class ConfigError(ValueError):
 @dataclass(frozen=True)
 class EntryV3Settings:
     enabled: bool
+    shadow_enabled: bool
+    execution_enabled: bool
     book_depth: int
     feature_window_events: int
     feature_window_ms: int
@@ -236,6 +238,14 @@ def load_settings(path: Path | str = DEFAULT_CONFIG_PATH) -> Settings:
     )
     entry_v3_settings = EntryV3Settings(
         enabled=_boolean(entry_v3.get("enabled", True), "paper_strategy.entry_v3.enabled"),
+        shadow_enabled=_boolean(
+            entry_v3.get("shadow_enabled", entry_v3.get("enabled", True)),
+            "paper_strategy.entry_v3.shadow_enabled",
+        ),
+        execution_enabled=_boolean(
+            entry_v3.get("execution_enabled", False),
+            "paper_strategy.entry_v3.execution_enabled",
+        ),
         book_depth=_integer(book.get("depth", 5), "entry_v3.book.depth"),
         feature_window_events=_integer(
             entry_v3.get("feature_window_events", 256),
@@ -413,6 +423,8 @@ def load_settings(path: Path | str = DEFAULT_CONFIG_PATH) -> Settings:
         raise ConfigError("paper_strategy.max_drawdown_pct must be positive and at most 5%")
     if not 1 <= entry_v3_settings.book_depth <= 20:
         raise ConfigError("entry_v3.book.depth must be between 1 and 20")
+    if entry_v3_settings.execution_enabled:
+        raise ConfigError("entry_v3.execution_enabled must remain false in PAPER shadow mode")
     if not 32 <= entry_v3_settings.feature_window_events <= 4096:
         raise ConfigError("entry_v3.feature_window_events must be between 32 and 4096")
     if not 1000 <= entry_v3_settings.feature_window_ms <= 60000:
