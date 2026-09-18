@@ -57,6 +57,23 @@ alpha parameters.
 
 No fixed symbol list is sacred.
 
+## Market Profiles
+
+`WIDE_CRYPTO` is the unchanged cross-sectional scanner and tournament profile. `XAU_ONLY` is a
+separate profile for `XAU_USDT` perpetual and does not reuse crypto thresholds blindly. It computes
+normalized short-window and trend returns, volatility regime, cost hurdle, confidence, and optional
+normalized-return agreement with `XAUT_USDT` and `PAXG_USDT`. Raw token prices are never compared.
+
+The XAU profile may return `LONG`, `SHORT`, or `WAIT`. Stale primary data, abnormal divergence,
+excessive spread, insufficient net edge, low confidence, invalid contract rules, or global risk state
+must produce `WAIT` or a blocked entry. Confirmation markets are never treated as guaranteed
+arbitrage. Initial values in `config/paper.toml` are conservative PAPER defaults, not validated alpha.
+
+Every trade record carries `market_scope`, `market_class`, strategy, entry reason, regime,
+confidence, risk profile, mode at entry, confirmation state, and a reserved session label. Analytics
+split ALL, CRYPTO, and XAU results; XAU also splits direction and regime. No adaptive process may
+combine XAU and crypto evidence into one undifferentiated training set.
+
 ## Frequency
 
 Expected operating range:

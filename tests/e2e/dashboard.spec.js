@@ -7,16 +7,32 @@ test("paper dashboard is truthful and controls fail closed", async ({ page }) =>
     trading_state: "HALTED",
     engine: { status: "SIMULATION_READY", nautilus_version: "test", risk_engine_enabled: true },
     accounting: { state: "VALID", reason: null, checkpoint_sequence: 4, last_event_sequence: 12, tolerance_usdt: "0.00000001" },
-    risk: { state: "OK", risk_day_utc: "2026-08-27", day_start_equity_usdt: "300" },
+    risk: { state: "OK", risk_day_utc: "2026-08-27", day_start_equity_usdt: "300", xau_risk_per_trade_usdt: 0.15, xau_leverage: 1 },
     execution_model: { state: "PAPER_SIM", queue_model: "NOT_MODELED" },
     run: { run_id: "11111111-1111-4111-8111-111111111111", session_id: "22222222-2222-4222-8222-222222222222", git_commit: "abcdef0123456789", config_hash: "1234567890abcdef", event_schema_version: 3 },
     storage: { free_disk_bytes: 20000000000, free_disk_percent: 50, safe: true },
     data: { status: "LIVE", source: "GATE_PUBLIC_REST", latency_ms: 18, age_seconds: 0.4, last_event_utc: "2026-08-27T01:00:00Z", error: null },
     portfolio: { equity_usdt: 300, daily_pnl_usdt: 0, drawdown_pct: 0, trades_today: 0, open_positions: 0, fees_usdt: 0, slippage_usdt: 0 },
+    profitability: {
+      normal: { net_pnl_usdt: -2.05 }, recovery: { net_pnl_usdt: 5.09 }, manual: { net_pnl_usdt: -0.04 },
+      full_run: { gross_price_pnl_usdt: 4.12, fees_usdt: 1.12, net_pnl_usdt: 3, turnover_usdt: 2200 },
+      spread_cost_usdt: null, modeled_slippage_usdt: null, current_session_drawdown_pct: 0.2,
+      current_utc_day_drawdown_pct: 0.4, current_wib_day_drawdown_pct: 0.5,
+      current_run_start_drawdown_pct: 0, current_all_time_high_drawdown_pct: 0.7,
+      current_normal_strategy_drawdown_pct: 1.1, current_open_risk_usdt: 0,
+      realized_daily_risk_usage_usdt: 4.7, trades_per_active_hour: null,
+      market_classes: {
+        ALL: { trades: 2, net_pnl_usdt: 3, gross_price_pnl_usdt: 4.12, fees_usdt: 1.12, turnover_usdt: 2200 },
+        CRYPTO: { trades: 1, net_pnl_usdt: 2, gross_price_pnl_usdt: 2.5, fees_usdt: 0.5, turnover_usdt: 1200 },
+        XAU: { trades: 1, net_pnl_usdt: 1, gross_price_pnl_usdt: 1.62, fees_usdt: 0.62, turnover_usdt: 1000 },
+      },
+    },
+    experiments: { mode: "UNCHANGED_BASELINE", exit_variant: "BASELINE_FULL_TP", rejection_counts: {}, evidence_status: "INSUFFICIENT EVIDENCE" },
     open_trade: null,
     trade_history: [{ closed_at: "2026-08-27T00:58:00Z", symbol: "ETH_USDT", side: "LONG", quantity: 0.01, open_price: 2480.5, close_price: 2490.5, realized_pnl_usdt: 0.08, pnl_pct: 0.3225, fee_usdt: 0.025, reason: "TAKE_PROFIT" }],
     orders: 0,
-    strategy: { name: "REST Momentum", symbol: "ETH_USDT", status: "PAUSED", armed: false, expected_gross_bps: 0, expected_cost_bps: 0, expected_net_bps: 0, last_signal: null },
+    strategy: { name: "REST Momentum", symbol: "ETH_USDT", status: "PAUSED", armed: false, expected_gross_bps: 0, expected_cost_bps: 0, expected_net_bps: 0, last_signal: null, xau: { direction: "LONG", confidence: 0.78, regime: "TRENDING_UP", volatility: "NORMAL", confirmation: "AGREE", reasons: ["QUALIFIED"], feed_health: { XAU_USDT: "HEALTHY", XAUT_USDT: "HEALTHY", PAXG_USDT: "HEALTHY" }, contract_status: "VALID" } },
+    market_scope: { active_scope: "WIDE_CRYPTO", requested_scope: null, switch_status: "ACTIVE", switch_policy: null, open_positions: 0, blocking_reason: null, execution_symbol: "DYNAMIC" },
     entry_v3: { status: "LIVE", strategy_status: "SHADOW", execution_enabled: false, candidate_count: 3, accepted_count: 1, rejected_count: 2, latest_candidate: { decision: "REJECTED", direction: "LONG" } },
     tradingview: { enabled: false, status: "DISABLED", advisory_only: true, execution_influence: "NONE", symbol: null, expected_symbol: "GATE:ETHUSDT.P", timeframe: null, expected_timeframe: "5", bias: "UNAVAILABLE", confidence: null, regime: "UNAVAILABLE", latency_ms: null, freshness_ms: null, pine_signal: "UNAVAILABLE", nautilus_agreement: "UNAVAILABLE", error: null },
     markets: [
@@ -28,7 +44,17 @@ test("paper dashboard is truthful and controls fail closed", async ({ page }) =>
     controls: { pause_allowed: false, resume_allowed: true, flatten_allowed: false },
   };
   await page.route("**/api/**", async (route) => {
-    if (route.request().url().endsWith("/resume")) {
+    if (route.request().url().endsWith("/api/market-scope") && route.request().method() === "POST") {
+      const payload = route.request().postDataJSON();
+      state.market_scope = { ...state.market_scope, active_scope: payload.scope, switch_status: "ACTIVE", switch_policy: payload.switch_policy };
+      if (payload.scope === "XAU_ONLY" && !state.markets.some((market) => market.symbol === "XAU_USDT")) {
+        state.markets.push(
+          { symbol: "XAU_USDT", last: 3680.25, change_pct: 0.8, bid: 3680.2, ask: 3680.3, spread_bps: 0.27, volume_quote: 120000000, funding_rate: 0, screen_score: 0, selected: false, rejection: "XAU PROFILE" },
+          { symbol: "XAUT_USDT", last: 3678.1, change_pct: 0.7, bid: 3678, ask: 3678.2, spread_bps: 0.54, volume_quote: 50000000, funding_rate: 0, screen_score: 0, selected: false, rejection: "REFERENCE" },
+          { symbol: "PAXG_USDT", last: 3679.4, change_pct: 0.75, bid: 3679.3, ask: 3679.5, spread_bps: 0.54, volume_quote: 60000000, funding_rate: 0, screen_score: 0, selected: false, rejection: "REFERENCE" },
+        );
+      }
+    } else if (route.request().url().endsWith("/resume")) {
       state.trading_state = "ACTIVE";
       state.controls.pause_allowed = true;
       state.controls.resume_allowed = false;
@@ -60,8 +86,29 @@ test("paper dashboard is truthful and controls fail closed", async ({ page }) =>
   await expect(page.locator("#trade-rows")).toContainText("+$0.08");
   await expect(page.locator("#trade-rows")).toContainText("+0.323%");
   await expect(page.locator("#trade-rows")).toContainText("$0.03");
+  await expect(page.locator("#normal-net")).toHaveText("-$2.05");
+  await expect(page.locator("#recovery-net")).toHaveText("+$5.09");
+  await expect(page.locator("#evidence-status")).toHaveText("INSUFFICIENT EVIDENCE");
+  await expect(page.locator("#analytics")).toContainText("Recovery and manual results are excluded");
+  await page.locator("#analytics-scope").selectOption("XAU");
+  await expect(page.locator("#full-net")).toHaveText("+$1.00");
+  await page.locator("#analytics-scope").selectOption("ALL");
   await expect(page.locator("#tv-status")).toHaveText("DISABLED");
   await page.screenshot({ path: "test-results/dashboard-overview.png", fullPage: true });
+
+  await page.getByRole("button", { name: "XAU ONLY" }).click();
+  await expect(page.locator("#scope-status")).toHaveText("ACTIVE: XAU ONLY");
+  await expect(page.locator("#xau-panel")).toBeVisible();
+  await expect(page.locator("#xau-signal")).toHaveText("LONG");
+  await expect(page.locator("#xaut-health")).toHaveText("HEALTHY");
+  await expect(page.locator("#markets")).toBeHidden();
+  await page.screenshot({ path: "test-results/dashboard-xau-scope.png", fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.screenshot({ path: "test-results/dashboard-xau-scope-mobile.png", fullPage: true });
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.getByRole("button", { name: "WIDE CRYPTO" }).click();
+  await expect(page.locator("#scope-status")).toHaveText("ACTIVE: WIDE CRYPTO");
 
   state.portfolio.open_positions = 1;
   state.open_trade = { symbol: "ETH_USDT", side: "LONG", quantity: 0.01, entry_price: 2491.54, current_price: 2492.25 };
@@ -131,13 +178,26 @@ test("risk halt timing never promises automatic resume", async ({ page }) => {
   state.controls.new_paper_run_allowed = true;
   state.alerts = ["Paper risk limit reached (MAX_DRAWDOWN); new entries are halted."];
   await page.evaluate(() => refresh());
-  await expect(page.locator("#halt-timer")).toHaveText("NO COUNTDOWN · MAX DRAWDOWN DOES NOT EXPIRE · MANUAL REVIEW REQUIRED");
+  await expect(page.locator("#halt-timer")).toContainText("MANUAL REVIEW ELIGIBLE IN");
+  await expect(page.locator("#halt-timer")).toContainText("NO AUTOMATIC RESUME");
   await expect(page.getByRole("button", { name: "RESUME PAPER" })).toBeDisabled();
   const newRun = page.getByRole("button", { name: "START NEW PAPER RUN" });
   await expect(newRun).toBeEnabled();
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.screenshot({ path: "test-results/max-drawdown-new-run-mobile.png", fullPage: true });
+
+  state.risk.state = "MAX_DRAWDOWN_REVIEW";
+  state.controls.resume_allowed = true;
+  state.controls.new_paper_run_allowed = false;
+  await page.evaluate(() => refresh());
+  await expect(page.locator("#halt-timer")).toHaveText("NO AUTOMATIC LIFT · MAX DRAWDOWN REVIEW · MANUAL REVIEW REQUIRED");
+  await expect(page.getByRole("button", { name: "RESUME PAPER" })).toBeEnabled();
+
+  state.risk.state = "MAX_DRAWDOWN";
+  state.controls.resume_allowed = false;
+  state.controls.new_paper_run_allowed = true;
+  await page.evaluate(() => refresh());
   await page.route("**/api/control/new-paper-run", (route) => {
     expect(route.request().postDataJSON()).toEqual({ confirm_new_run: true });
     state.trading_state = "ACTIVE";

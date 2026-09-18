@@ -22,6 +22,49 @@ active_symbols = 8
 minimum_quote_volume = "5000000"
 maximum_spread_bps = "12"
 
+[market]
+scope = "WIDE_CRYPTO"
+
+[mode_switch]
+policy = "SWITCH_WHEN_FLAT"
+
+[xau]
+execution_symbol = "XAU_USDT"
+stale_after_seconds = 15
+short_window = 3
+trend_window = 12
+entry_threshold_bps = "12"
+high_volatility_bps = "16"
+low_volatility_bps = "3"
+
+[xau.confirmations]
+enabled = true
+required = false
+symbols = ["XAUT_USDT", "PAXG_USDT"]
+abnormal_divergence_bps = "18"
+
+# Conservative, unvalidated PAPER defaults. Global limits remain absolute.
+[xau.risk]
+risk_per_trade_usdt = "0.15"
+maximum_position_notional_usdt = "15"
+maximum_leverage = "1"
+maximum_daily_loss_usdt = "3"
+maximum_consecutive_losses = 3
+stop_loss_method = "FIXED_BPS"
+stop_loss_bps = "35"
+take_profit_method = "FIXED_BPS"
+take_profit_bps = "55"
+trailing_enabled = false
+trailing_bps = "30"
+cooldown_seconds = 60
+volatility_scaling = true
+high_volatility_size_factor = "0.50"
+degraded_confirmation_size_factor = "0.75"
+minimum_confidence = "0.65"
+maximum_spread_bps = "8"
+slippage_bps = "2"
+maximum_holding_seconds = 300
+
 [paper_strategy]
 enabled = true
 symbol = "ETH_USDT"
@@ -39,6 +82,36 @@ cooldown_seconds = 60
 slippage_bps = "2"
 daily_loss_usdt = "6"
 max_drawdown_pct = "3"
+
+# Profit-seeking changes remain independent and OFF in the unchanged baseline.
+[paper_strategy.experiments]
+risk_normalized_sizing = false
+risk_budget_usdt = "0.20"
+maximum_position_notional_usdt = "30"
+maximum_symbol_exposure_usdt = "30"
+liquidity_notional_cap_usdt = "30"
+signal_reset_reentry = false
+maximum_symbol_attempts = 0
+attempt_window_seconds = 3600
+maximum_consecutive_symbol_losses = 0
+maximum_symbol_loss_utc_day_usdt = "0"
+maximum_symbol_loss_wib_day_usdt = "0"
+candidate_ranking = false
+candidate_top_n = 1
+cost_to_edge_gate = false
+cost_multiplier = "1.50"
+market_quality_filters = false
+maximum_entry_spread_bps = "12"
+minimum_entry_quote_volume = "5000000"
+minimum_depth_usdt = "0"
+maximum_one_bar_volatility_bps = "0"
+maximum_price_gap_bps = "0"
+require_order_book = false
+exit_variant = "BASELINE_FULL_TP"
+runner_trail_bps = "35"
+runner_max_hold_seconds = 300
+edge_decay_time_exit = false
+protective_orders = false
 
 [paper_strategy.entry_v3]
 enabled = true

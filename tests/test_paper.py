@@ -354,6 +354,71 @@ class PaperTraderTests(unittest.TestCase):
             finally:
                 trader.close()
 
+    def test_partial_runner_preserves_quantity_and_reconciles(self) -> None:
+        report = RuntimeReport("PAPER", "test", "TESTER-001", "GATE", "300", "1", True, True)
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, SAFE_ENV):
+            base = load_settings()
+            settings = replace(
+                base,
+                log_directory=Path(directory),
+                strategy_window=3,
+                strategy_persistence_ticks=2,
+                strategy_regime_window=6,
+                strategy_entry_threshold_bps=Decimal("10"),
+                strategy_minimum_net_edge_bps=Decimal("1"),
+                strategy_minimum_confidence=Decimal("0.10"),
+                strategy_stop_loss_bps=Decimal("20"),
+                strategy_take_profit_bps=Decimal("20"),
+                strategy_slippage_bps=Decimal("0"),
+                strategy_cooldown_seconds=5,
+                experiments=replace(
+                    base.experiments,
+                    exit_variant="TP75_RUNNER25",
+                    runner_trail_bps=Decimal("35"),
+                ),
+            )
+            trader = PaperTrader(report, settings, logging.getLogger("test.paper.runner"))
+            try:
+                for price in (100.00, 100.05, 100.10, 100.15, 100.20, 100.35, 100.36):
+                    trader.process(market(price), entry_enabled=True)
+                opened = trader.snapshot()
+                assert opened.open_trade is not None
+                entry_quantity = Decimal(str(opened.open_trade["quantity"]))
+
+                trader.process(market(100.70), entry_enabled=True)
+                runner = trader.snapshot()
+                self.assertEqual(runner.positions, 1)
+                assert runner.open_trade is not None
+                runner_quantity = Decimal(str(runner.open_trade["quantity"]))
+                self.assertGreater(runner_quantity, 0)
+                self.assertLess(runner_quantity, entry_quantity)
+                self.assertEqual(
+                    cast(dict[str, object], runner.diagnostics["accounting"])["state"],
+                    "VALID",
+                )
+
+                trader.process(market(100.21), entry_enabled=True)
+                closed = trader.snapshot()
+                self.assertEqual(closed.positions, 0)
+                self.assertEqual(len(closed.trade_history), 1)
+                events = [
+                    json.loads(line)
+                    for line in current_events_path(Path(directory)).read_text().splitlines()
+                ]
+                fills = [event for event in events if event["event_type"] == "fill"]
+                entry_fills = [event for event in fills if event["side"] == "BUY"]
+                exit_fills = [event for event in fills if event["side"] == "SELL"]
+                self.assertEqual(
+                    sum((Decimal(event["quantity"]) for event in entry_fills), Decimal(0)),
+                    sum((Decimal(event["quantity"]) for event in exit_fills), Decimal(0)),
+                )
+                self.assertEqual(
+                    cast(dict[str, object], closed.diagnostics["accounting"])["state"],
+                    "VALID",
+                )
+            finally:
+                trader.close()
+
     def test_restart_with_open_position_requires_manual_flatten(self) -> None:
         report = RuntimeReport("PAPER", "test", "TESTER-001", "GATE", "300", "1", True, True)
         with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, SAFE_ENV):
@@ -380,10 +445,30 @@ class PaperTraderTests(unittest.TestCase):
                 blocked = recovered.snapshot()
                 self.assertTrue(blocked.risk_halted)
                 self.assertEqual(blocked.strategy["status"], "RECOVERY_REQUIRED")
+                recovery_timing = cast(dict[str, object], blocked.diagnostics["recovery_timing"])
+                self.assertIsNotNone(recovery_timing["last_successful_heartbeat_utc"])
+                self.assertIsNotNone(recovery_timing["restart_detected_at_utc"])
+                self.assertIsInstance(recovery_timing["outage_duration_ms"], int)
+                self.assertTrue(recovery_timing["position_exposed_during_outage"])
                 self.assertTrue(recovered.flatten())
                 flattened = recovered.snapshot()
                 self.assertFalse(flattened.risk_halted)
                 self.assertEqual(flattened.positions, 0)
+                events_path = current_events_path(Path(directory))
+                sequence = scan_ledger(
+                    events_path, str(flattened.diagnostics["run"]["run_id"])
+                ).last_sequence
+                self.assertFalse(recovered.flatten())
+                self.assertEqual(
+                    scan_ledger(
+                        events_path,
+                        str(flattened.diagnostics["run"]["run_id"]),
+                    ).last_sequence,
+                    sequence,
+                )
+                completed = cast(dict[str, object], flattened.diagnostics["recovery_timing"])
+                self.assertEqual(completed["recovery_action"], "RECOVERY_FLATTEN_COMPLETED")
+                self.assertIsNotNone(completed["recovery_completed_at_utc"])
             finally:
                 recovered.close()
 
@@ -439,7 +524,9 @@ class PaperTraderTests(unittest.TestCase):
             ledger_path.write_bytes(ledger_original)
             recovered = PaperTrader(report, settings, logging.getLogger("test.split-recovered"))
             try:
-                self.assertEqual(recovered.snapshot().diagnostics["accounting"]["state"], "VALID")  # type: ignore[index]
+                self.assertEqual(
+                    recovered.snapshot().diagnostics["accounting"]["state"], "VALID"
+                )
                 self.assertTrue(recovered.recheck_integrity())
                 self.assertEqual(path.read_bytes(), original)
                 self.assertEqual(recovered.monitored_symbols, (checkpoint["position"]["symbol"],))
@@ -583,7 +670,7 @@ class PaperTraderTests(unittest.TestCase):
                 self.assertAlmostEqual(quantity, opened_quantity, places=6)
                 self.assertAlmostEqual(
                     cast(float, trade["fee_usdt"]),
-                    cast(float, closed.portfolio["fees_usdt"]),
+                    closed.portfolio["fees_usdt"],
                     places=8,
                 )
                 self.assertAlmostEqual(
@@ -827,12 +914,16 @@ class PaperTraderTests(unittest.TestCase):
                 trader.process(market(2500), entry_enabled=False)
                 trader._risk_day_utc = yesterday
                 trader._day_start_equity = Decimal("301")
+                trader._peak_equity = Decimal("310")
                 trader.process(market(2500.1), entry_enabled=False)
                 snapshot = trader.snapshot()
                 self.assertFalse(snapshot.risk_halted)
                 self.assertAlmostEqual(snapshot.portfolio["daily_pnl_usdt"], 0.0)
+                self.assertAlmostEqual(snapshot.portfolio["drawdown_pct"], 0.0)
                 state = json.loads((path / "paper-state.json").read_text(encoding="utf-8"))
                 self.assertEqual(state["risk_day_utc"], datetime.now(UTC).date().isoformat())
+                self.assertEqual(state["peak_equity_usdt"], state["day_start_equity_usdt"])
+                self.assertEqual(state["drawdown_window"], "UTC_DAY")
                 self.assertGreaterEqual(state["checkpoint_sequence"], 3)
             finally:
                 trader.close()
@@ -853,6 +944,31 @@ class PaperTraderTests(unittest.TestCase):
                 self.assertTrue(blocked.risk_halted)
                 risk = cast(dict[str, object], blocked.diagnostics["risk"])
                 self.assertEqual(risk["state"], "DAILY_LOSS_REVIEW")
+                self.assertTrue(risk["rollover_review_required"])
+                self.assertTrue(trader.authorize_resume())
+                self.assertFalse(trader.snapshot().risk_halted)
+            finally:
+                trader.close()
+
+    def test_max_drawdown_rollover_requires_manual_review_before_resume(self) -> None:
+        report = RuntimeReport("PAPER", "test", "TESTER-001", "GATE", "300", "1", True, True)
+        yesterday = (datetime.now(UTC) - timedelta(days=1)).date().isoformat()
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, SAFE_ENV):
+            settings = replace(load_settings(), log_directory=Path(directory))
+            trader = PaperTrader(report, settings, logging.getLogger("test.paper.drawdown-review"))
+            try:
+                trader.process(market(2500), entry_enabled=False)
+                trader._risk_day_utc = yesterday
+                trader._peak_equity = Decimal("310")
+                trader._risk_halted = True
+                trader._risk_halt_reason = "MAX_DRAWDOWN"
+                trader.process(market(2500.1), entry_enabled=True)
+                blocked = trader.snapshot()
+                self.assertTrue(blocked.risk_halted)
+                self.assertAlmostEqual(blocked.portfolio["drawdown_pct"], 0.0)
+                risk = cast(dict[str, object], blocked.diagnostics["risk"])
+                self.assertEqual(risk["state"], "MAX_DRAWDOWN_REVIEW")
+                self.assertEqual(risk["drawdown_window"], "UTC_DAY")
                 self.assertTrue(risk["rollover_review_required"])
                 self.assertTrue(trader.authorize_resume())
                 self.assertFalse(trader.snapshot().risk_halted)

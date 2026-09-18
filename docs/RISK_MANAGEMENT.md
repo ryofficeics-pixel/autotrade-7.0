@@ -1,5 +1,16 @@
 # Risk Management
 
+## Scope-Specific Risk
+
+The XAU profile has independent PAPER parameters for risk per trade, maximum notional, leverage,
+daily loss, consecutive losses, stop/take distances, trailing configuration, cooldown, volatility
+scaling, confidence, spread, slippage, and holding time. The existing portfolio limits remain the
+absolute upper layer. Phase 1 validates XAU leverage at no more than 1x even if Gate advertises more.
+
+Market-scope transitions never bypass risk. `SWITCH_WHEN_FLAT` and `FLATTEN_AND_SWITCH` block all new
+entries until flat and reconciled. `SWITCH_NOW_KEEP_EXISTING` changes only future entry eligibility;
+the shared position manager continues managing the existing position under its entry metadata.
+
 ## Principle
 
 The bot is allowed to miss opportunities. It is not allowed to continue operating on corrupted assumptions.
@@ -54,13 +65,15 @@ Use explicit states:
 
 `HALTED` must require explicit recovery/restart logic.
 
-The v3 paper checkpoint persists the UTC risk day, start-of-day equity/trade count, all-time peak
+The v3 paper checkpoint persists the UTC risk day, start-of-day equity/trade count, UTC-day peak
 equity, halt state and halt reason. Legacy checkpoints remain readable but are `STATE_INVALID` because
 their incomplete event identities cannot prove reconciliation; they are never silently migrated or
 reset. Daily PnL is always current equity minus current risk-day start equity. `DAILY_LOSS` is sticky
 through ordinary restart. A UTC rollover changes it to `DAILY_LOSS_REVIEW`, which still requires a
-fresh-data manual resume. Rollover never overrides accounting, recovery, drawdown or persistence
-failures.
+fresh-data manual resume. Maximum drawdown is current equity versus the highest equity recorded in
+the same UTC day. The peak resets at UTC rollover. A prior-day `MAX_DRAWDOWN` halt changes to
+`MAX_DRAWDOWN_REVIEW` and also requires manual resume. Rollover never overrides accounting,
+recovery or persistence failures.
 
 ## Automatic Halt Conditions
 
@@ -94,11 +107,11 @@ new snapshot passes validation and freshness checks.
 Auto-resume trading after any other critical state failure is not allowed. Execution, persistence,
 risk-limit and invalid-state failures remain `HALTED` until explicit recovery proves state integrity.
 
-A flat, reconciled `MAX_DRAWDOWN` run may be closed from the local dashboard only by explicitly
-starting a new PAPER experiment. The transition must archive the completed run, create a new run
-identity and empty ledger, retain PAPER mode and all configured limits, require fresh market data
-and safe storage, and require a user confirmation. It must not mutate the halted run or present the
-new experiment as a resumed continuation.
+A current-day `MAX_DRAWDOWN` halt remains enforced until the UTC risk day ends. At rollover it becomes
+`MAX_DRAWDOWN_REVIEW`; a fresh-data manual resume clears the review. A flat, reconciled halted run may
+instead be closed by explicitly starting a new PAPER experiment. That transition archives the run,
+creates a new run identity and empty ledger, retains PAPER mode and all configured limits, and requires
+fresh market data, safe storage, and user confirmation.
 
 `accounting.state` must equal `VALID` before either manual or watchdog resume is permitted. A single
 invalid symbol quote is quarantined locally and does not become a portfolio halt; an account, risk,

@@ -58,6 +58,37 @@ Gate.io WebSocket / Public REST
 
 ## Architectural Boundaries
 
+### Market Scope and Single Entry Authority
+
+`MarketScopeController` sits between market-profile signal routing and `PaperTrader`'s final order
+submission. It is the only durable source for `WIDE_CRYPTO` versus `XAU_ONLY` and for the explicit
+switch state machine: `ACTIVE`, `SWITCH_REQUESTED`, `DRAINING`, `FLATTENING`, `RECONCILING`,
+`ACTIVATING`, or `FAILED`.
+
+```text
+Gate public metadata and quotes
+             |
+      MarketScopeController
+        /              \
+WIDE_CRYPTO          XAU_ONLY
+scanner/ranking      XAU signal + XAUT/PAXG confirmation
+        \              /
+          final entry guard
+                 |
+      shared Nautilus PAPER engine
+      risk / positions / ledger / recovery
+```
+
+The final entry guard immediately precedes `submit_candidate`. It validates PAPER permission, active
+scope, transition state, allowed instrument, freshness, Gate contract metadata, spread, confidence,
+risk state, duplicate-position state, and cooldown-controlled strategy eligibility. A profile cannot
+submit independently. The dashboard remains a read/control plane.
+
+The XAU profile fails closed when `XAU_USDT` is missing, disabled, delisting, stale, or incompatible
+with configured 1x leverage and discovered price/quantity rules. It never falls back to XAUT, PAXG,
+XAU5L, XAU5S, or a crypto symbol. One stale optional confirmation degrades the confirmation and size;
+it does not crash the execution feed.
+
 ### Optional TradingView Research Sidecar
 
 ```text

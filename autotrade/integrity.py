@@ -91,6 +91,16 @@ REQUIRED_BY_EVENT: Final = {
         "quantity",
         "price",
     ),
+    "position_reduced": (
+        "symbol",
+        "strategy_id",
+        "signal_id",
+        "position_id",
+        "side",
+        "quantity",
+        "reason",
+        "realized_pnl_usdt",
+    ),
     "exit_signal": (
         "symbol",
         "strategy_id",
@@ -521,6 +531,8 @@ def scan_ledger(path: Path, expected_run_id: str) -> LedgerSummary:
     entry_orders: dict[str, Decimal] = {}
     entry_fills: dict[str, list[dict[str, object]]] = {}
     exit_fills: set[str] = set()
+    exit_filled_quantities: dict[str, Decimal] = {}
+    reduced_positions: set[str] = set()
     fill_ids: set[str] = set()
     active_transition: tuple[str, int] | None = None
     committed_transitions: set[str] = set()
@@ -605,6 +617,9 @@ def scan_ledger(path: Path, expected_run_id: str) -> LedgerSummary:
                 entry_fills.setdefault(position_id, []).append(event)
             else:
                 exit_fills.add(position_id)
+                exit_filled_quantities[position_id] = exit_filled_quantities.get(
+                    position_id, Decimal(0)
+                ) + _event_decimal(event, "quantity")
             fees += _event_decimal(event, "fee_amount")
         elif event_type == "position_opened":
             if signal_id not in signals or position_id is None or position_id in positions:
@@ -623,6 +638,19 @@ def scan_ledger(path: Path, expected_run_id: str) -> LedgerSummary:
             if position_id not in positions or order_id is None:
                 raise IntegrityError(f"orphan exit order at line {line_number}")
             orders[order_id] = signal_id
+        elif event_type == "position_reduced":
+            if position_id not in positions:
+                raise IntegrityError(f"orphan position reduction at line {line_number}")
+            entry_quantity, _, _ = _entry_totals(entry_fills.get(position_id, []))
+            remaining = entry_quantity - exit_filled_quantities.get(position_id, Decimal(0))
+            if (
+                remaining <= 0
+                or abs(_event_decimal(event, "quantity") - remaining) > ACCOUNTING_TOLERANCE
+            ):
+                raise IntegrityError(f"position reduction quantity mismatch at line {line_number}")
+            realized += _event_decimal(event, "realized_pnl_usdt")
+            assert position_id is not None
+            reduced_positions.add(position_id)
         elif event_type in {"position_closed", "recovery_flatten"}:
             if event_type == "position_closed" and position_id not in positions:
                 raise IntegrityError(f"orphan position close at line {line_number}")
@@ -650,12 +678,18 @@ def scan_ledger(path: Path, expected_run_id: str) -> LedgerSummary:
         ):
             raise IntegrityError("open position entry-fill identity mismatch")
         quantity, notional, entry_fee = _entry_totals(fills)
+        open_quantity = quantity - exit_filled_quantities.get(position_id, Decimal(0))
+        if open_quantity < 0:
+            raise IntegrityError("exit fills exceed open position quantity")
+        remaining_entry_fee = (
+            entry_fee * open_quantity / quantity if quantity > 0 else Decimal(0)
+        )
         positions[position_id] = {
             **position,
-            "exit_pending": position_id in exit_fills,
-            "quantity": str(quantity),
+            "exit_pending": position_id in exit_fills and position_id not in reduced_positions,
+            "quantity": str(open_quantity),
             "price": str(notional / quantity),
-            "entry_fee_usdt": str(entry_fee),
+            "entry_fee_usdt": str(remaining_entry_fee),
         }
     return LedgerSummary(
         last_sequence,
@@ -694,13 +728,19 @@ def reconcile_checkpoint(state: dict[str, object], summary: LedgerSummary) -> No
     persisted_fees = _state_decimal(state, "fees_usdt")
     persisted_realized = _state_decimal(state, "cumulative_realized_pnl_usdt")
     if abs(persisted_realized - summary.realized_pnl) > ACCOUNTING_TOLERANCE:
-        raise IntegrityError("checkpoint/ledger realized PnL mismatch")
+        raise IntegrityError(
+            "checkpoint/ledger realized PnL mismatch: "
+            f"checkpoint={persisted_realized} ledger={summary.realized_pnl}"
+        )
     position = state.get("position")
     open_entry_fee = (
         _state_decimal(position, "entry_fee_usdt") if isinstance(position, dict) else Decimal(0)
     )
     if abs(balance - (starting + summary.realized_pnl - open_entry_fee)) > ACCOUNTING_TOLERANCE:
-        raise IntegrityError("checkpoint/ledger equity mismatch")
+        raise IntegrityError(
+            "checkpoint/ledger equity mismatch: "
+            f"balance={balance} expected={starting + summary.realized_pnl - open_entry_fee}"
+        )
     if abs(persisted_fees - summary.fees) > ACCOUNTING_TOLERANCE:
         raise IntegrityError("checkpoint/ledger fee mismatch")
     if int(str(state.get("trades", -1))) != summary.trade_count:
@@ -792,6 +832,7 @@ def create_new_run(
         "day_start_equity_usdt": str(starting_equity),
         "trades_at_day_start": 0,
         "peak_equity_usdt": str(starting_equity),
+        "drawdown_window": "UTC_DAY",
         "risk_halted": False,
         "risk_halt_reason": None,
         "rollover_review_required": False,

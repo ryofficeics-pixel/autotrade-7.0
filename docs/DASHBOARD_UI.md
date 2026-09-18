@@ -1,5 +1,21 @@
 # Dashboard and UI Specification
 
+## Market Scope Control
+
+The overview includes a prominent backend-authoritative `MARKET SCOPE` control with `WIDE CRYPTO`
+and `XAU ONLY` choices plus the three switch policies. A click first shows `SWITCHING`; the active
+indicator changes only after the backend response. `FLATTEN_AND_SWITCH` requires explicit browser
+confirmation and is never the default.
+
+The readout shows active scope, execution symbol, allowed decisions, requested scope, switch state,
+and blocking reason. In XAU scope, the broad scanner is hidden without being removed and a dedicated
+panel shows XAU price, `LONG/SHORT/WAIT`, confidence, regime, volatility, confirmation health,
+position, entry, PnL, stop, target, leverage, and risk. Analytics provides ALL, CRYPTO, and XAU views.
+
+Scope controls use native buttons and a native select, preserve visible keyboard focus, expose
+`aria-pressed`, and use 44 px targets on small screens. Failure and pending states remain visible and
+never imply activation before backend confirmation.
+
 ## TradingView Secondary Card
 
 Show the optional TradingView observer inside System Health, visually subordinate to Gate/Nautilus.
@@ -177,10 +193,10 @@ by `RESUME PAPER`; risk limits, uncertain execution, and corrupt evidence are ne
 The result remains visible on refresh, controls stay disabled during a request, and failures
 are shown explicitly. An unreachable backend requires the existing local launcher/watchdog.
 
-The operating-state header shows halt timing without implying automatic recovery. A current
-`DAILY_LOSS` halt counts down to UTC rollover, labeled as manual-review eligibility rather than
-automatic resume. `DAILY_LOSS_REVIEW`, `MAX_DRAWDOWN`, and other critical halts show that no
-automatic lift exists and manual review is required.
+The operating-state header shows halt timing without implying automatic recovery. Current-day
+`DAILY_LOSS` and `MAX_DRAWDOWN` halts count down to UTC rollover, labeled as manual-review eligibility.
+`DAILY_LOSS_REVIEW`, `MAX_DRAWDOWN_REVIEW`, and other critical halts show that manual review is
+required and no automatic resume occurs.
 
 `START NEW PAPER RUN` is the in-app replacement for the `new-paper-run --confirm-new-run`
 command. It is available only when a reconciled PAPER account is flat, market data is fresh,

@@ -100,6 +100,28 @@ the modeled edge does not exceed costs. `health_check.bat` runs a singleton loca
 immediate terminal check. Run `check_ui.bat` for the Chromium critical-path audit in Codex's bundled
 Playwright runtime.
 
+## Market Scope
+
+The dashboard and backend expose one persistent entry-routing scope:
+
+- `WIDE_CRYPTO` preserves the existing dynamic crypto screen and tournament.
+- `XAU_ONLY` permits new entries only in Gate `XAU_USDT` perpetual. It uses its own configurable
+  signal and risk profile, with `XAUT_USDT` and `PAXG_USDT` as optional confirmation feeds.
+
+Both scopes use the same `PaperTrader`, Nautilus account, final entry guard, risk controls, position
+management, append-only ledger, and restart reconciliation. XAU decisions are `LONG`, `SHORT`, or
+`WAIT`; restricting the universe never forces a position. Scope state is atomically persisted to
+`logs/market-scope.json`, while changes are appended to `logs/market-scope-events.jsonl`.
+
+The switch policies are `SWITCH_WHEN_FLAT` (default), `SWITCH_NOW_KEEP_EXISTING`, and the explicitly
+confirmed `FLATTEN_AND_SWITCH`. A pending drain or flatten blocks every new entry while the existing
+position remains under the common manager. The API is `GET/POST /api/market-scope`.
+
+Relevant settings are centralized in `[market]`, `[mode_switch]`, `[xau]`,
+`[xau.confirmations]`, and `[xau.risk]` in `config/paper.toml`. Missing market-scope settings migrate
+to `WIDE_CRYPTO`. Phase 1 still rejects every LIVE configuration; XAU support does not create a live
+order path.
+
 `install_autostart.bat` installs a current-user Windows Startup launcher. At login it starts the
 dashboard only when the health endpoint is unavailable, waits up to 30 seconds for health, starts the
 local 15-minute watchdog, and then opens `http://127.0.0.1:8767/` in the default browser. Run

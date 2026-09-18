@@ -8,6 +8,8 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
+from autotrade.market_scope import MarketScope, SwitchPolicy, XauSettings
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config" / "paper.toml"
 
@@ -40,6 +42,37 @@ class EntryV3Settings:
     whipsaw_block_ms: int
     maximum_reversals: int
     minimum_events: int
+
+
+@dataclass(frozen=True)
+class ExperimentSettings:
+    risk_normalized_sizing: bool
+    risk_budget_usdt: Decimal
+    maximum_position_notional_usdt: Decimal
+    maximum_symbol_exposure_usdt: Decimal
+    liquidity_notional_cap_usdt: Decimal
+    signal_reset_reentry: bool
+    maximum_symbol_attempts: int
+    attempt_window_seconds: int
+    maximum_consecutive_symbol_losses: int
+    maximum_symbol_loss_utc_day_usdt: Decimal
+    maximum_symbol_loss_wib_day_usdt: Decimal
+    candidate_ranking: bool
+    candidate_top_n: int
+    cost_to_edge_gate: bool
+    cost_multiplier: Decimal
+    market_quality_filters: bool
+    maximum_entry_spread_bps: Decimal
+    minimum_entry_quote_volume: Decimal
+    minimum_depth_usdt: Decimal
+    maximum_one_bar_volatility_bps: Decimal
+    maximum_price_gap_bps: Decimal
+    require_order_book: bool
+    exit_variant: str
+    runner_trail_bps: Decimal
+    runner_max_hold_seconds: int
+    edge_decay_time_exit: bool
+    protective_orders: bool
 
 
 @dataclass(frozen=True)
@@ -78,7 +111,11 @@ class Settings:
     strategy_slippage_bps: Decimal
     strategy_daily_loss_usdt: Decimal
     strategy_max_drawdown_pct: Decimal
+    market_scope: MarketScope
+    mode_switch_policy: SwitchPolicy
+    xau: XauSettings
     entry_v3: EntryV3Settings
+    experiments: ExperimentSettings
     dashboard_host: str
     dashboard_port: int
     tradingview_enabled: bool
@@ -159,8 +196,14 @@ def load_settings(path: Path | str = DEFAULT_CONFIG_PATH) -> Settings:
     exhaustion = _optional_table(entry_v3, "exhaustion")
     edge = _optional_table(entry_v3, "edge")
     whipsaw = _optional_table(entry_v3, "whipsaw")
+    experiments = _optional_table(strategy, "experiments")
     dashboard = _table(document, "dashboard")
     tradingview = _optional_table(document, "tradingview")
+    market = _optional_table(document, "market")
+    mode_switch = _optional_table(document, "mode_switch")
+    xau = _optional_table(document, "xau")
+    confirmations = _optional_table(xau, "confirmations")
+    xau_risk = _optional_table(xau, "risk")
 
     mode = os.getenv("TRADING_MODE", str(trading.get("mode", ""))).strip().upper()
     live_enabled = _boolean(
@@ -236,6 +279,106 @@ def load_settings(path: Path | str = DEFAULT_CONFIG_PATH) -> Settings:
     strategy_max_drawdown_pct = _decimal(
         strategy.get("max_drawdown_pct", "3"), "paper_strategy.max_drawdown_pct"
     )
+    try:
+        market_scope = MarketScope(str(market.get("scope", "WIDE_CRYPTO")).strip().upper())
+        mode_switch_policy = SwitchPolicy(
+            str(mode_switch.get("policy", "SWITCH_WHEN_FLAT")).strip().upper()
+        )
+    except ValueError as exc:
+        raise ConfigError(str(exc)) from exc
+    raw_confirmation_symbols = confirmations.get("symbols", ["XAUT_USDT", "PAXG_USDT"])
+    if not isinstance(raw_confirmation_symbols, list) or not all(
+        isinstance(symbol, str) for symbol in raw_confirmation_symbols
+    ):
+        raise ConfigError("xau.confirmations.symbols must be a string array")
+    xau_settings = XauSettings(
+        execution_symbol=str(xau.get("execution_symbol", "XAU_USDT")).strip().upper(),
+        confirmation_symbols=tuple(symbol.strip().upper() for symbol in raw_confirmation_symbols),
+        confirmations_enabled=_boolean(
+            confirmations.get("enabled", True), "xau.confirmations.enabled"
+        ),
+        confirmations_required=_boolean(
+            confirmations.get("required", False), "xau.confirmations.required"
+        ),
+        stale_after_seconds=_integer(
+            xau.get("stale_after_seconds", market_stale_after_seconds),
+            "xau.stale_after_seconds",
+        ),
+        short_window=_integer(xau.get("short_window", 3), "xau.short_window"),
+        trend_window=_integer(xau.get("trend_window", 12), "xau.trend_window"),
+        entry_threshold_bps=_decimal(
+            xau.get("entry_threshold_bps", "12"), "xau.entry_threshold_bps"
+        ),
+        abnormal_divergence_bps=_decimal(
+            confirmations.get("abnormal_divergence_bps", "18"),
+            "xau.confirmations.abnormal_divergence_bps",
+        ),
+        high_volatility_bps=_decimal(
+            xau.get("high_volatility_bps", "16"), "xau.high_volatility_bps"
+        ),
+        low_volatility_bps=_decimal(
+            xau.get("low_volatility_bps", "3"), "xau.low_volatility_bps"
+        ),
+        minimum_confidence=_decimal(
+            xau_risk.get("minimum_confidence", "0.65"), "xau.risk.minimum_confidence"
+        ),
+        maximum_spread_bps=_decimal(
+            xau_risk.get("maximum_spread_bps", "8"), "xau.risk.maximum_spread_bps"
+        ),
+        slippage_bps=_decimal(xau_risk.get("slippage_bps", "2"), "xau.risk.slippage_bps"),
+        risk_per_trade_usdt=_decimal(
+            xau_risk.get("risk_per_trade_usdt", "0.15"), "xau.risk.risk_per_trade_usdt"
+        ),
+        maximum_position_notional_usdt=_decimal(
+            xau_risk.get("maximum_position_notional_usdt", "15"),
+            "xau.risk.maximum_position_notional_usdt",
+        ),
+        maximum_leverage=_decimal(
+            xau_risk.get("maximum_leverage", "1"), "xau.risk.maximum_leverage"
+        ),
+        maximum_daily_loss_usdt=_decimal(
+            xau_risk.get("maximum_daily_loss_usdt", "3"),
+            "xau.risk.maximum_daily_loss_usdt",
+        ),
+        maximum_consecutive_losses=_integer(
+            xau_risk.get("maximum_consecutive_losses", 3),
+            "xau.risk.maximum_consecutive_losses",
+        ),
+        stop_loss_method=str(xau_risk.get("stop_loss_method", "FIXED_BPS")).strip().upper(),
+        stop_loss_bps=_decimal(
+            xau_risk.get("stop_loss_bps", "35"), "xau.risk.stop_loss_bps"
+        ),
+        take_profit_method=str(
+            xau_risk.get("take_profit_method", "FIXED_BPS")
+        ).strip().upper(),
+        take_profit_bps=_decimal(
+            xau_risk.get("take_profit_bps", "55"), "xau.risk.take_profit_bps"
+        ),
+        trailing_enabled=_boolean(
+            xau_risk.get("trailing_enabled", False), "xau.risk.trailing_enabled"
+        ),
+        trailing_bps=_decimal(
+            xau_risk.get("trailing_bps", "30"), "xau.risk.trailing_bps"
+        ),
+        cooldown_seconds=_integer(
+            xau_risk.get("cooldown_seconds", 60), "xau.risk.cooldown_seconds"
+        ),
+        volatility_scaling=_boolean(
+            xau_risk.get("volatility_scaling", True), "xau.risk.volatility_scaling"
+        ),
+        high_volatility_size_factor=_decimal(
+            xau_risk.get("high_volatility_size_factor", "0.50"),
+            "xau.risk.high_volatility_size_factor",
+        ),
+        degraded_confirmation_size_factor=_decimal(
+            xau_risk.get("degraded_confirmation_size_factor", "0.75"),
+            "xau.risk.degraded_confirmation_size_factor",
+        ),
+        maximum_holding_seconds=_integer(
+            xau_risk.get("maximum_holding_seconds", 300),
+            "xau.risk.maximum_holding_seconds",
+        ),
+    )
     entry_v3_settings = EntryV3Settings(
         enabled=_boolean(entry_v3.get("enabled", True), "paper_strategy.entry_v3.enabled"),
         shadow_enabled=_boolean(
@@ -296,6 +439,113 @@ def load_settings(path: Path | str = DEFAULT_CONFIG_PATH) -> Settings:
             whipsaw.get("maximum_reversals", 4), "entry_v3.whipsaw.maximum_reversals"
         ),
         minimum_events=_integer(entry_v3.get("minimum_events", 12), "entry_v3.minimum_events"),
+    )
+    experiment_settings = ExperimentSettings(
+        risk_normalized_sizing=_boolean(
+            experiments.get("risk_normalized_sizing", False),
+            "paper_strategy.experiments.risk_normalized_sizing",
+        ),
+        risk_budget_usdt=_decimal(
+            experiments.get("risk_budget_usdt", "0.20"),
+            "paper_strategy.experiments.risk_budget_usdt",
+        ),
+        maximum_position_notional_usdt=_decimal(
+            experiments.get("maximum_position_notional_usdt", strategy_notional_usdt),
+            "paper_strategy.experiments.maximum_position_notional_usdt",
+        ),
+        maximum_symbol_exposure_usdt=_decimal(
+            experiments.get("maximum_symbol_exposure_usdt", strategy_notional_usdt),
+            "paper_strategy.experiments.maximum_symbol_exposure_usdt",
+        ),
+        liquidity_notional_cap_usdt=_decimal(
+            experiments.get("liquidity_notional_cap_usdt", strategy_notional_usdt),
+            "paper_strategy.experiments.liquidity_notional_cap_usdt",
+        ),
+        signal_reset_reentry=_boolean(
+            experiments.get("signal_reset_reentry", False),
+            "paper_strategy.experiments.signal_reset_reentry",
+        ),
+        maximum_symbol_attempts=_integer(
+            experiments.get("maximum_symbol_attempts", 0),
+            "paper_strategy.experiments.maximum_symbol_attempts",
+        ),
+        attempt_window_seconds=_integer(
+            experiments.get("attempt_window_seconds", 3600),
+            "paper_strategy.experiments.attempt_window_seconds",
+        ),
+        maximum_consecutive_symbol_losses=_integer(
+            experiments.get("maximum_consecutive_symbol_losses", 0),
+            "paper_strategy.experiments.maximum_consecutive_symbol_losses",
+        ),
+        maximum_symbol_loss_utc_day_usdt=_decimal(
+            experiments.get("maximum_symbol_loss_utc_day_usdt", "0"),
+            "paper_strategy.experiments.maximum_symbol_loss_utc_day_usdt",
+        ),
+        maximum_symbol_loss_wib_day_usdt=_decimal(
+            experiments.get("maximum_symbol_loss_wib_day_usdt", "0"),
+            "paper_strategy.experiments.maximum_symbol_loss_wib_day_usdt",
+        ),
+        candidate_ranking=_boolean(
+            experiments.get("candidate_ranking", False),
+            "paper_strategy.experiments.candidate_ranking",
+        ),
+        candidate_top_n=_integer(
+            experiments.get("candidate_top_n", 1),
+            "paper_strategy.experiments.candidate_top_n",
+        ),
+        cost_to_edge_gate=_boolean(
+            experiments.get("cost_to_edge_gate", False),
+            "paper_strategy.experiments.cost_to_edge_gate",
+        ),
+        cost_multiplier=_decimal(
+            experiments.get("cost_multiplier", "1.50"),
+            "paper_strategy.experiments.cost_multiplier",
+        ),
+        market_quality_filters=_boolean(
+            experiments.get("market_quality_filters", False),
+            "paper_strategy.experiments.market_quality_filters",
+        ),
+        maximum_entry_spread_bps=_decimal(
+            experiments.get("maximum_entry_spread_bps", maximum_spread_bps),
+            "paper_strategy.experiments.maximum_entry_spread_bps",
+        ),
+        minimum_entry_quote_volume=_decimal(
+            experiments.get("minimum_entry_quote_volume", minimum_quote_volume),
+            "paper_strategy.experiments.minimum_entry_quote_volume",
+        ),
+        minimum_depth_usdt=_decimal(
+            experiments.get("minimum_depth_usdt", "0"),
+            "paper_strategy.experiments.minimum_depth_usdt",
+        ),
+        maximum_one_bar_volatility_bps=_decimal(
+            experiments.get("maximum_one_bar_volatility_bps", "0"),
+            "paper_strategy.experiments.maximum_one_bar_volatility_bps",
+        ),
+        maximum_price_gap_bps=_decimal(
+            experiments.get("maximum_price_gap_bps", "0"),
+            "paper_strategy.experiments.maximum_price_gap_bps",
+        ),
+        require_order_book=_boolean(
+            experiments.get("require_order_book", False),
+            "paper_strategy.experiments.require_order_book",
+        ),
+        exit_variant=str(experiments.get("exit_variant", "BASELINE_FULL_TP")).strip().upper(),
+        runner_trail_bps=_decimal(
+            experiments.get("runner_trail_bps", strategy_stop_loss_bps),
+            "paper_strategy.experiments.runner_trail_bps",
+        ),
+        runner_max_hold_seconds=_integer(
+            experiments.get("runner_max_hold_seconds", strategy_max_hold_seconds),
+            "paper_strategy.experiments.runner_max_hold_seconds",
+        ),
+        edge_decay_time_exit=_boolean(
+            experiments.get("edge_decay_time_exit", False),
+            "paper_strategy.experiments.edge_decay_time_exit",
+        ),
+        protective_orders=_boolean(
+            experiments.get("protective_orders", False),
+            "paper_strategy.experiments.protective_orders",
+        ),
     )
     dashboard_host = str(dashboard.get("host", "127.0.0.1")).strip()
     dashboard_port = _integer(dashboard.get("port", 8765), "dashboard.port")
@@ -421,6 +671,56 @@ def load_settings(path: Path | str = DEFAULT_CONFIG_PATH) -> Settings:
         )
     if strategy_max_drawdown_pct <= 0 or strategy_max_drawdown_pct > 5:
         raise ConfigError("paper_strategy.max_drawdown_pct must be positive and at most 5%")
+    if xau_settings.execution_symbol != "XAU_USDT":
+        raise ConfigError("xau.execution_symbol must be XAU_USDT in Phase 1")
+    if set(xau_settings.confirmation_symbols) - {"XAUT_USDT", "PAXG_USDT"}:
+        raise ConfigError("XAU confirmation symbols may only be XAUT_USDT and PAXG_USDT")
+    if not 2 <= xau_settings.short_window < xau_settings.trend_window <= 120:
+        raise ConfigError("XAU windows must satisfy 2 <= short_window < trend_window <= 120")
+    if xau_settings.stale_after_seconds <= market_poll_seconds:
+        raise ConfigError("xau.stale_after_seconds must exceed the market poll interval")
+    if xau_settings.entry_threshold_bps <= 0 or xau_settings.abnormal_divergence_bps <= 0:
+        raise ConfigError("XAU entry and divergence thresholds must be positive")
+    if not Decimal("0.50") <= xau_settings.minimum_confidence <= 1:
+        raise ConfigError("xau.risk.minimum_confidence must be between 0.50 and 1.00")
+    if xau_settings.maximum_spread_bps <= 0:
+        raise ConfigError("xau.risk.maximum_spread_bps must be positive")
+    if xau_settings.slippage_bps < 0 or xau_settings.slippage_bps > 10:
+        raise ConfigError("xau.risk.slippage_bps must be between 0 and 10")
+    if xau_settings.maximum_leverage <= 0 or xau_settings.maximum_leverage > 1:
+        raise ConfigError("Phase 1 XAU leverage must be greater than 0 and no more than 1x")
+    if (
+        xau_settings.maximum_position_notional_usdt <= 0
+        or xau_settings.maximum_position_notional_usdt > starting_balance / 4
+    ):
+        raise ConfigError("XAU maximum position must be positive and at most 25% of capital")
+    if (
+        xau_settings.risk_per_trade_usdt <= 0
+        or xau_settings.maximum_daily_loss_usdt <= 0
+        or xau_settings.maximum_daily_loss_usdt > strategy_daily_loss_usdt
+    ):
+        raise ConfigError("XAU risk budgets must be positive and not exceed the global daily limit")
+    if xau_settings.maximum_consecutive_losses < 1:
+        raise ConfigError("xau.risk.maximum_consecutive_losses must be positive")
+    if (
+        xau_settings.stop_loss_method != "FIXED_BPS"
+        or xau_settings.take_profit_method != "FIXED_BPS"
+    ):
+        raise ConfigError("Phase 1 XAU stop and take-profit methods must be FIXED_BPS")
+    if min(xau_settings.stop_loss_bps, xau_settings.take_profit_bps) <= 0:
+        raise ConfigError("XAU stop and take-profit distances must be positive")
+    if xau_settings.cooldown_seconds < market_poll_seconds:
+        raise ConfigError("xau.risk.cooldown_seconds must cover one poll interval")
+    if xau_settings.maximum_holding_seconds <= market_poll_seconds:
+        raise ConfigError("xau.risk.maximum_holding_seconds must exceed one poll interval")
+    if not all(
+        Decimal(0) < value <= Decimal(1)
+        for value in (
+            xau_settings.high_volatility_size_factor,
+            xau_settings.degraded_confirmation_size_factor,
+        )
+    ):
+        raise ConfigError("XAU size factors must be greater than 0 and no more than 1")
     if not 1 <= entry_v3_settings.book_depth <= 20:
         raise ConfigError("entry_v3.book.depth must be between 1 and 20")
     if entry_v3_settings.execution_enabled:
@@ -466,6 +766,54 @@ def load_settings(path: Path | str = DEFAULT_CONFIG_PATH) -> Settings:
         raise ConfigError("entry_v3.whipsaw.maximum_reversals must be between 1 and 20")
     if not 4 <= entry_v3_settings.minimum_events <= entry_v3_settings.feature_window_events:
         raise ConfigError("entry_v3.minimum_events is outside the feature window")
+    if experiment_settings.risk_budget_usdt <= 0:
+        raise ConfigError("experiments.risk_budget_usdt must be positive")
+    if not all(
+        Decimal(0) < value <= strategy_notional_usdt
+        for value in (
+            experiment_settings.maximum_position_notional_usdt,
+            experiment_settings.maximum_symbol_exposure_usdt,
+            experiment_settings.liquidity_notional_cap_usdt,
+        )
+    ):
+        raise ConfigError("experiment notional caps must be positive and no larger than baseline")
+    if experiment_settings.maximum_symbol_attempts < 0:
+        raise ConfigError("experiments.maximum_symbol_attempts must not be negative")
+    if experiment_settings.attempt_window_seconds < market_poll_seconds:
+        raise ConfigError("experiments.attempt_window_seconds must cover one poll interval")
+    if experiment_settings.maximum_consecutive_symbol_losses < 0:
+        raise ConfigError("experiments.maximum_consecutive_symbol_losses must not be negative")
+    if (
+        experiment_settings.maximum_symbol_loss_utc_day_usdt < 0
+        or experiment_settings.maximum_symbol_loss_wib_day_usdt < 0
+    ):
+        raise ConfigError("experiment symbol-loss limits must not be negative")
+    if not 1 <= experiment_settings.candidate_top_n <= active_symbols:
+        raise ConfigError("experiments.candidate_top_n must be between 1 and active_symbols")
+    if experiment_settings.cost_multiplier < 1:
+        raise ConfigError("experiments.cost_multiplier must be at least 1")
+    if experiment_settings.maximum_entry_spread_bps <= 0:
+        raise ConfigError("experiments.maximum_entry_spread_bps must be positive")
+    if (
+        experiment_settings.minimum_entry_quote_volume < 0
+        or experiment_settings.minimum_depth_usdt < 0
+    ):
+        raise ConfigError("experiment liquidity limits must not be negative")
+    if (
+        experiment_settings.maximum_one_bar_volatility_bps < 0
+        or experiment_settings.maximum_price_gap_bps < 0
+    ):
+        raise ConfigError("experiment volatility and gap limits must not be negative")
+    if experiment_settings.exit_variant not in {
+        "BASELINE_FULL_TP",
+        "TP75_RUNNER25",
+        "TP50_RUNNER50",
+    }:
+        raise ConfigError("experiments.exit_variant is unsupported")
+    if experiment_settings.runner_trail_bps <= 0:
+        raise ConfigError("experiments.runner_trail_bps must be positive")
+    if experiment_settings.runner_max_hold_seconds < strategy_max_hold_seconds:
+        raise ConfigError("experiments.runner_max_hold_seconds must not shorten baseline hold time")
     if dashboard_host != "127.0.0.1":
         raise ConfigError("Phase 1 dashboard must bind to 127.0.0.1")
     if not 1024 <= dashboard_port <= 65535:
@@ -522,7 +870,11 @@ def load_settings(path: Path | str = DEFAULT_CONFIG_PATH) -> Settings:
         strategy_slippage_bps=strategy_slippage_bps,
         strategy_daily_loss_usdt=strategy_daily_loss_usdt,
         strategy_max_drawdown_pct=strategy_max_drawdown_pct,
+        market_scope=market_scope,
+        mode_switch_policy=mode_switch_policy,
+        xau=xau_settings,
         entry_v3=entry_v3_settings,
+        experiments=experiment_settings,
         dashboard_host=dashboard_host,
         dashboard_port=dashboard_port,
         tradingview_enabled=tradingview_enabled,

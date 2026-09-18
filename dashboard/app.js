@@ -5,6 +5,8 @@ const money = new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximum
 const compact = new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 });
 let controlPending = false;
 let haltTiming = null;
+let analyticsScope = "ALL";
+let latestState = null;
 
 function text(id, value) { $(id).textContent = value; }
 function signed(value, digits = 2) { return `${value >= 0 ? "+" : ""}${value.toFixed(digits)}`; }
@@ -12,6 +14,10 @@ function price(value) {
   const maximumFractionDigits = value >= 1000 ? 2 : value >= 1 ? 4 : value >= 0.01 ? 6 : 8;
   return value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits });
 }
+function metricMoney(value) {
+  return Number.isFinite(value) ? `${value >= 0 ? "+" : "-"}$${money.format(Math.abs(value))}` : "N/A";
+}
+function metricPercent(value) { return Number.isFinite(value) ? `${value.toFixed(2)}%` : "N/A"; }
 function status(element, label, state) {
   element.textContent = label;
   element.className = `status ${state}`;
@@ -24,10 +30,8 @@ function renderHaltTiming() {
     return;
   }
   element.hidden = false;
-  if (haltTiming.riskState !== "DAILY_LOSS") {
-    element.textContent = haltTiming.riskState === "MAX_DRAWDOWN"
-      ? "NO COUNTDOWN · MAX DRAWDOWN DOES NOT EXPIRE · MANUAL REVIEW REQUIRED"
-      : `NO AUTOMATIC LIFT · ${haltTiming.riskState.replaceAll("_", " ")} · MANUAL REVIEW REQUIRED`;
+  if (!["DAILY_LOSS", "MAX_DRAWDOWN"].includes(haltTiming.riskState)) {
+    element.textContent = `NO AUTOMATIC LIFT · ${haltTiming.riskState.replaceAll("_", " ")} · MANUAL REVIEW REQUIRED`;
     return;
   }
   const remaining = haltTiming.reviewAt - Date.now();
@@ -84,24 +88,67 @@ function renderMarkets(markets) {
   }));
 }
 
+function renderMarketScope(state) {
+  const scope = state.market_scope || {};
+  const active = scope.active_scope || "UNKNOWN";
+  const switchState = scope.switch_status || "FAILED";
+  const switching = switchState !== "ACTIVE";
+  status($("scope-status"), switching ? switchState.replaceAll("_", " ") : `ACTIVE: ${active.replaceAll("_", " ")}`, switching ? "warn" : "good");
+  text("scope-current", active.replaceAll("_", " "));
+  text("scope-execution", active === "XAU_ONLY" ? "XAU_USDT PERPETUAL" : "DYNAMIC CRYPTO UNIVERSE");
+  text("scope-allowed", active === "XAU_ONLY" ? "LONG / SHORT / WAIT" : "RANKED CRYPTO ENTRIES");
+  text("scope-pending", scope.requested_scope ? `${scope.requested_scope.replaceAll("_", " ")} · ${switchState.replaceAll("_", " ")}` : "NONE");
+  $("scope-wide").setAttribute("aria-pressed", String(active === "WIDE_CRYPTO"));
+  $("scope-xau").setAttribute("aria-pressed", String(active === "XAU_ONLY"));
+  $("scope-wide").disabled = controlPending || switching || active === "WIDE_CRYPTO";
+  $("scope-xau").disabled = controlPending || switching || active === "XAU_ONLY";
+  $("scope-policy").disabled = controlPending || switching;
+  const feedback = $("scope-feedback");
+  feedback.textContent = scope.blocking_reason ? `Blocked: ${scope.blocking_reason.replaceAll("_", " ")}` : "";
+  feedback.hidden = !scope.blocking_reason;
+
+  const xauPanel = $("xau-panel");
+  xauPanel.hidden = active !== "XAU_ONLY";
+  $("markets").hidden = active === "XAU_ONLY";
+  if (active !== "XAU_ONLY") return;
+  const xau = state.strategy?.xau || {};
+  const xauMarket = (state.markets || []).find((market) => market.symbol === "XAU_USDT");
+  const open = state.open_trade?.symbol === "XAU_USDT" ? state.open_trade : null;
+  text("xau-signal", xau.direction || "WAIT");
+  $("xau-signal").className = `badge ${["LONG", "SHORT"].includes(xau.direction) ? "paper" : "neutral"}`;
+  text("xau-price", Number.isFinite(xauMarket?.last) ? `$${price(xauMarket.last)}` : "N/A");
+  text("xau-confidence", Number.isFinite(xau.confidence) ? `${Math.round(xau.confidence * 100)}%` : "0%");
+  text("xau-regime", (xau.regime || "UNTRADABLE").replaceAll("_", " "));
+  text("xau-volatility", xau.volatility || "UNKNOWN");
+  text("xaut-health", xau.feed_health?.XAUT_USDT || "UNAVAILABLE");
+  text("paxg-health", xau.feed_health?.PAXG_USDT || "UNAVAILABLE");
+  text("xau-position", open ? open.side : "FLAT");
+  text("xau-entry-pnl", open ? `$${price(open.entry_price)} / ${metricPercent(open.pnl_pct)}` : "N/A / N/A");
+  text("xau-stop-target", open ? `$${price(open.stop_price)} / $${price(open.target_price)}` : "N/A / N/A");
+  const xauLeverage = Number.isFinite(state.risk?.xau_leverage) ? `${state.risk.xau_leverage}x` : "N/A";
+  const xauRisk = Number.isFinite(state.risk?.xau_risk_per_trade_usdt) ? `$${money.format(state.risk.xau_risk_per_trade_usdt)}` : "N/A";
+  text("xau-leverage-risk", `${xauLeverage} / ${xauRisk}`);
+  text("xau-reason", `${(xau.reasons || ["WAITING_FOR_DATA"]).join(", ").replaceAll("_", " ")} · confirmation ${xau.confirmation || "UNAVAILABLE"} · contract ${xau.contract_status || "CHECKING"}`);
+}
+
 function renderTradingView(tradingview = {}) {
   const value = tradingview.status || "UNAVAILABLE";
   const state = value === "CONNECTED" ? "good" : ["DEGRADED", "STALE"].includes(value) ? "warn" : value === "DISABLED" ? "neutral" : "bad";
   status($("tv-status"), value, state);
-  text("tv-symbol", tradingview.symbol || tradingview.expected_symbol || "—");
+  text("tv-symbol", tradingview.symbol || tradingview.expected_symbol || "N/A");
   $("tv-symbol").title = tradingview.symbol || tradingview.expected_symbol || "";
-  text("tv-timeframe", tradingview.timeframe || tradingview.expected_timeframe || "—");
-  const confidence = Number.isFinite(tradingview.confidence) ? `${Math.round(tradingview.confidence * 100)}%` : "—";
+  text("tv-timeframe", tradingview.timeframe || tradingview.expected_timeframe || "N/A");
+  const confidence = Number.isFinite(tradingview.confidence) ? `${Math.round(tradingview.confidence * 100)}%` : "N/A";
   text("tv-bias", `${tradingview.bias || "UNAVAILABLE"} / ${confidence}`);
-  const secondaryPrice = Number.isFinite(tradingview.price) ? `$${price(tradingview.price)}` : "—";
-  const divergence = Number.isFinite(tradingview.price_divergence_pct) ? `${signed(tradingview.price_divergence_pct, 4)}%` : "—";
+  const secondaryPrice = Number.isFinite(tradingview.price) ? `$${price(tradingview.price)}` : "N/A";
+  const divergence = Number.isFinite(tradingview.price_divergence_pct) ? `${signed(tradingview.price_divergence_pct, 4)}%` : "N/A";
   text("tv-price", `${secondaryPrice} / ${divergence}`);
-  text("tv-indicators", Number.isFinite(tradingview.indicator_count) ? String(tradingview.indicator_count) : "—");
+  text("tv-indicators", Number.isFinite(tradingview.indicator_count) ? String(tradingview.indicator_count) : "N/A");
   $("tv-indicators").title = (tradingview.indicators || []).map((item) => `${item.study} · ${item.name}: ${item.value}`).join("\n");
   text("tv-regime", `${tradingview.regime || "UNAVAILABLE"} / ${tradingview.pine_signal || "UNAVAILABLE"}`);
   text("tv-agreement", tradingview.nautilus_agreement || "UNAVAILABLE");
-  const latency = Number.isFinite(tradingview.latency_ms) ? `${tradingview.latency_ms} ms` : "—";
-  const freshness = Number.isFinite(tradingview.freshness_ms) ? `${(tradingview.freshness_ms / 1000).toFixed(1)} s` : "—";
+  const latency = Number.isFinite(tradingview.latency_ms) ? `${tradingview.latency_ms} ms` : "N/A";
+  const freshness = Number.isFinite(tradingview.freshness_ms) ? `${(tradingview.freshness_ms / 1000).toFixed(1)} s` : "N/A";
   text("tv-timing", `${latency} / ${freshness}`);
   text("tv-detail", tradingview.error || "No execution influence. Gate and Nautilus remain authoritative.");
 }
@@ -111,7 +158,7 @@ function renderTradeHistory(trades = []) {
   if (!trades.length) {
     const row = document.createElement("tr");
     const item = document.createElement("td");
-    item.colSpan = 9;
+    item.colSpan = 11;
     item.className = "empty";
     item.textContent = "No timestamped paper trades in the last 48 hours.";
     row.append(item);
@@ -123,18 +170,56 @@ function renderTradeHistory(trades = []) {
     const pnlClass = trade.realized_pnl_usdt >= 0 ? "positive" : "negative";
     cell(row, new Date(trade.closed_at).toLocaleString());
     cell(row, trade.symbol.replace("_", " / "), "symbol");
+    cell(row, trade.classification || (trade.reason === "RECOVERY_FLATTEN" ? "OUTAGE HELD" : trade.reason.includes("MANUAL") ? "MANUAL" : "NORMAL"));
     cell(row, trade.side);
     cell(row, `$${price(trade.open_price)}`);
     cell(row, `$${price(trade.close_price)}`);
-    cell(row, `${trade.realized_pnl_usdt >= 0 ? "+" : "-"}$${money.format(Math.abs(trade.realized_pnl_usdt))}`, pnlClass);
-    cell(row, `${signed(trade.pnl_pct, 3)}%`, pnlClass);
+    const gross = Number.isFinite(trade.gross_price_pnl_usdt) ? trade.gross_price_pnl_usdt : trade.realized_pnl_usdt + trade.fee_usdt;
+    cell(row, metricMoney(gross), gross >= 0 ? "positive" : "negative");
     cell(row, `$${money.format(trade.fee_usdt)}`);
+    cell(row, metricMoney(trade.realized_pnl_usdt), pnlClass);
+    cell(row, `${signed(trade.pnl_pct, 3)}%`, pnlClass);
     cell(row, trade.reason.replaceAll("_", " "));
     return row;
   }));
 }
 
+function renderProfitability(profitability = {}, experiments = {}) {
+  const filtered = profitability.market_classes?.[analyticsScope];
+  const normal = analyticsScope === "ALL" ? profitability.normal || {} : filtered || {};
+  const recovery = analyticsScope === "ALL" ? profitability.recovery || {} : {};
+  const manual = analyticsScope === "ALL" ? profitability.manual || {} : {};
+  const full = analyticsScope === "ALL" ? profitability.full_run || {} : filtered || {};
+  text("normal-net", metricMoney(normal.net_pnl_usdt));
+  text("recovery-net", metricMoney(recovery.net_pnl_usdt));
+  text("manual-net", metricMoney(manual.net_pnl_usdt));
+  text("full-net", metricMoney(full.net_pnl_usdt));
+  text("gross-pnl", metricMoney(full.gross_price_pnl_usdt));
+  text("total-fees", metricMoney(Number.isFinite(full.fees_usdt) ? -full.fees_usdt : NaN));
+  text("open-fees", metricMoney(Number.isFinite(profitability.open_position_fees_usdt) ? -profitability.open_position_fees_usdt : NaN));
+  const realized = analyticsScope === "ALL" ? profitability.realized_pnl_usdt : full.net_pnl_usdt;
+  const unrealized = analyticsScope === "ALL" ? profitability.unrealized_pnl_usdt : full.unrealized_pnl_usdt;
+  text("realized-unrealized", `${metricMoney(realized)} / ${metricMoney(unrealized)}`);
+  const spread = Number.isFinite(profitability.spread_cost_usdt) ? `$${money.format(profitability.spread_cost_usdt)}` : "N/A";
+  const slippage = Number.isFinite(profitability.modeled_slippage_usdt) ? `$${money.format(profitability.modeled_slippage_usdt)}` : "N/A";
+  text("spread-slippage", `${spread} / ${slippage}`);
+  text("turnover", Number.isFinite(full.turnover_usdt) ? `$${money.format(full.turnover_usdt)}` : "N/A");
+  text("calendar-drawdowns", `${metricPercent(profitability.current_session_drawdown_pct)} / ${metricPercent(profitability.current_utc_day_drawdown_pct)} / ${metricPercent(profitability.current_wib_day_drawdown_pct)}`);
+  text("run-drawdowns", `${metricPercent(profitability.current_run_start_drawdown_pct)} / ${metricPercent(profitability.current_all_time_high_drawdown_pct)}`);
+  text("normal-drawdown", metricPercent(analyticsScope === "ALL" ? profitability.current_normal_strategy_drawdown_pct : full.max_drawdown_pct));
+  text("risk-usage", `${metricMoney(Number.isFinite(profitability.current_open_risk_usdt) ? -profitability.current_open_risk_usdt : NaN)} / ${metricMoney(Number.isFinite(profitability.realized_daily_risk_usage_usdt) ? -profitability.realized_daily_risk_usage_usdt : NaN)}`);
+  text("experiment-mode", (experiments.mode || "UNCHANGED_BASELINE").replaceAll("_", " "));
+  text("exit-mode", (experiments.exit_variant || "BASELINE_FULL_TP").replaceAll("_", " "));
+  const blocks = experiments.rejection_counts || {};
+  text("experiment-blocks", `${blocks.SIGNAL_RESET_REQUIRED || 0} / ${blocks.COST_TO_EDGE_REJECTED || 0}`);
+  text("trade-frequency", Number.isFinite(profitability.trades_per_active_hour) ? profitability.trades_per_active_hour.toFixed(2) : "N/A");
+  const evidence = experiments.evidence_status || "INSUFFICIENT EVIDENCE";
+  text("evidence-status", evidence);
+  $("evidence-status").className = `badge ${evidence === "VALIDATED PAPER CANDIDATE" ? "paper" : "neutral"}`;
+}
+
 function render(state) {
+  latestState = state;
   const accounting = state.accounting || { state: "INVALID", reason: "Accounting diagnostics unavailable." };
   const accountingValid = accounting.state === "VALID";
   const accountingBanner = $("accounting-banner");
@@ -143,18 +228,18 @@ function render(state) {
   text("accounting-detail", accountingValid ? `Checkpoint ${accounting.checkpoint_sequence} and event ${accounting.last_event_sequence} reconcile at ${accounting.tolerance_usdt} USDT tolerance.` : accounting.reason || "Reconciliation failed; Resume is disabled.");
   const openTradeTicker = $("open-trade-ticker");
   const openTrade = state.open_trade;
-  openTradeTicker.textContent = openTrade ? `OPEN PAPER TRADE · ${openTrade.symbol.replace("_", " / ")} · ${openTrade.side} · ENTRY $${price(openTrade.entry_price)} · NOW ${Number.isFinite(openTrade.current_price) ? `$${price(openTrade.current_price)}` : "—"}` : "OPEN PAPER TRADE —";
+  openTradeTicker.textContent = openTrade ? `OPEN PAPER TRADE · ${openTrade.symbol.replace("_", " / ")} · ${openTrade.side} · ENTRY $${price(openTrade.entry_price)} · NOW ${Number.isFinite(openTrade.current_price) ? `$${price(openTrade.current_price)}` : "N/A"}` : "OPEN PAPER TRADE";
   openTradeTicker.hidden = !openTrade;
   status($("engine-status"), "ENGINE SIM READY", state.engine.risk_engine_enabled ? "good" : "bad");
   status($("data-status"), `DATA ${state.data.status}`, state.data.status === "LIVE" ? "good" : "bad");
-  text("latency", state.data.latency_ms === null ? "— ms" : `${state.data.latency_ms} ms`);
+  text("latency", state.data.latency_ms === null ? "N/A ms" : `${state.data.latency_ms} ms`);
   text("trading-state", state.trading_state);
   text("state-detail", state.trading_state === "ACTIVE" ? "Paper strategy and market screening are active." : accountingValid ? "New paper entries are blocked." : "New entries are blocked by accounting integrity.");
   const riskState = state.risk?.state || "UNKNOWN";
   const riskDay = state.risk?.risk_day_utc;
   haltTiming = state.trading_state === "HALTED" && riskState !== "OK" ? {
     riskState,
-    reviewAt: riskState === "DAILY_LOSS" && /^\d{4}-\d{2}-\d{2}$/.test(riskDay || "")
+    reviewAt: ["DAILY_LOSS", "MAX_DRAWDOWN"].includes(riskState) && /^\d{4}-\d{2}-\d{2}$/.test(riskDay || "")
       ? Date.parse(`${riskDay}T00:00:00Z`) + 86_400_000
       : NaN,
   } : null;
@@ -171,19 +256,23 @@ function render(state) {
   text("execution-model", `${state.execution_model?.state || "UNKNOWN"} · ${state.execution_model?.queue_model || "UNKNOWN"}`);
   text("data-source", state.data.source);
   text("data-age", state.data.age_seconds === null ? "NO DATA" : `${state.data.age_seconds.toFixed(1)} s`);
-  text("last-event", state.data.last_event_utc ? new Date(state.data.last_event_utc).toLocaleTimeString() : "—");
+  text("last-event", state.data.last_event_utc ? new Date(state.data.last_event_utc).toLocaleTimeString() : "N/A");
   text("orders-positions", `${state.orders} / ${state.portfolio.open_positions}`);
-  const runId = state.run?.run_id || "—";
-  const sessionId = state.run?.session_id || "—";
+  const runId = state.run?.run_id || "N/A";
+  const sessionId = state.run?.session_id || "N/A";
   text("run-session", `${runId.slice(0, 8)} / ${sessionId.slice(0, 8)}`);
   $("run-session").title = `${runId} / ${sessionId}`;
   const gitCommit = state.run?.git_commit || "UNKNOWN";
   const configHash = state.run?.config_hash || "UNKNOWN";
   text("build-config", `${gitCommit.slice(0, 8)} / ${configHash.slice(0, 8)}`);
   $("build-config").title = `${gitCommit} / ${configHash}`;
-  text("checkpoint-event", `${accounting.checkpoint_sequence ?? "—"} / ${accounting.last_event_sequence ?? "—"}`);
+  text("checkpoint-event", `${accounting.checkpoint_sequence ?? "N/A"} / ${accounting.last_event_sequence ?? "N/A"}`);
+  const recoveryTiming = state.recovery_timing || {};
+  const outage = Number.isFinite(recoveryTiming.outage_duration_ms) ? `${(recoveryTiming.outage_duration_ms / 1000).toFixed(1)} s` : "N/A";
+  text("restart-outage", `${recoveryTiming.restart_detected_at_utc ? new Date(recoveryTiming.restart_detected_at_utc).toLocaleString() : "N/A"} / ${outage}`);
+  text("recovery-action", (recoveryTiming.recovery_action || "NONE").replaceAll("_", " "));
   const freeBytes = state.storage?.free_disk_bytes;
-  text("free-disk", Number.isFinite(freeBytes) ? `${(freeBytes / 1_000_000_000).toFixed(1)} GB · ${state.storage.free_disk_percent.toFixed(1)}%` : "—");
+  text("free-disk", Number.isFinite(freeBytes) ? `${(freeBytes / 1_000_000_000).toFixed(1)} GB · ${state.storage.free_disk_percent.toFixed(1)}%` : "N/A");
   text("strategy-status", "BASELINE · EXECUTION DISABLED");
   text("strategy-detail", "Frozen comparison baseline. It cannot submit PAPER orders.");
   const v3 = state.entry_v3 || {};
@@ -215,8 +304,10 @@ function render(state) {
   if (controlPending) for (const button of document.querySelectorAll("button")) button.disabled = true;
   $("connection-banner").hidden = true;
   renderTradingView(state.tradingview);
+  renderMarketScope(state);
   renderMarkets(state.markets);
   renderTradeHistory(state.trade_history);
+  renderProfitability(state.profitability, state.experiments);
 
   const alerts = state.alerts.map((message) => {
     const alert = document.createElement("p");
@@ -244,9 +335,40 @@ function disconnected() {
   $("new-run-button").disabled = true;
   $("restart-button").disabled = true;
   $("analyze-button").disabled = true;
+  $("scope-wide").disabled = true;
+  $("scope-xau").disabled = true;
+  $("scope-policy").disabled = true;
+  $("xau-panel").hidden = true;
   $("connection-banner").hidden = false;
   renderTradingView({ status: "UNAVAILABLE", error: "Backend state unavailable." });
   renderTradeHistory([]);
+  renderProfitability({}, {});
+}
+
+async function switchScope(target) {
+  if (controlPending) return;
+  const policy = $("scope-policy").value;
+  const confirmFlatten = policy === "FLATTEN_AND_SWITCH";
+  if (confirmFlatten && !window.confirm("Flatten the current PAPER position, reconcile accounting, and switch market scope?")) return;
+  controlPending = true;
+  $("scope-feedback").hidden = true;
+  status($("scope-status"), "SWITCHING", "warn");
+  for (const button of document.querySelectorAll("button")) button.disabled = true;
+  try {
+    const response = await fetch("/api/market-scope", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ scope: target, switch_policy: policy, confirm_flatten: confirmFlatten }),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+  } catch (error) {
+    text("scope-feedback", `Switch failed: ${error.message}.`);
+    $("scope-feedback").hidden = false;
+  } finally {
+    controlPending = false;
+    await refresh();
+  }
 }
 
 async function refresh() {
@@ -300,6 +422,12 @@ $("new-run-button").addEventListener("click", () => {
   if (window.confirm("Archive this halted run and start a new $300 PAPER experiment?")) {
     control("new-paper-run", { confirm_new_run: true });
   }
+});
+$("scope-wide").addEventListener("click", () => switchScope("WIDE_CRYPTO"));
+$("scope-xau").addEventListener("click", () => switchScope("XAU_ONLY"));
+$("analytics-scope").addEventListener("change", (event) => {
+  analyticsScope = event.target.value;
+  if (latestState) renderProfitability(latestState.profitability, latestState.experiments);
 });
 refresh();
 setInterval(refresh, 5000);

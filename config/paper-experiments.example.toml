@@ -1,0 +1,31 @@
+# Copy only reviewed values into paper.toml. This file is not loaded by the runtime.
+# All experiments remain PAPER-only and must be evaluated chronologically before use.
+
+[paper_strategy.experiments]
+risk_normalized_sizing = true
+risk_budget_usdt = "0.20"
+maximum_position_notional_usdt = "30"
+maximum_symbol_exposure_usdt = "30"
+liquidity_notional_cap_usdt = "30"
+signal_reset_reentry = true
+maximum_symbol_attempts = 2
+attempt_window_seconds = 3600
+maximum_consecutive_symbol_losses = 2
+maximum_symbol_loss_utc_day_usdt = "1.00"
+maximum_symbol_loss_wib_day_usdt = "1.00"
+candidate_ranking = true
+candidate_top_n = 1
+cost_to_edge_gate = true
+cost_multiplier = "1.50"
+market_quality_filters = true
+maximum_entry_spread_bps = "8"
+minimum_entry_quote_volume = "5000000"
+minimum_depth_usdt = "0"
+maximum_one_bar_volatility_bps = "0"
+maximum_price_gap_bps = "0"
+require_order_book = false
+exit_variant = "TP75_RUNNER25"
+runner_trail_bps = "35"
+runner_max_hold_seconds = 900
+edge_decay_time_exit = true
+protective_orders = true

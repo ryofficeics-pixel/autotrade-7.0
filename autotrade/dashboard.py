@@ -18,6 +18,12 @@ from urllib.request import Request, urlopen
 from autotrade.config import Settings
 from autotrade.entry_v3 import LiveEntryV3Shadow
 from autotrade.integrity import create_new_run
+from autotrade.market_scope import (
+    MarketScope,
+    MarketScopeController,
+    SwitchPolicy,
+    SwitchState,
+)
 from autotrade.paper import PaperTrader
 from autotrade.runtime import RuntimeReport, run_paper_smoke
 from autotrade.tradingview import TradingViewMonitor, build_tradingview_monitor
@@ -26,6 +32,7 @@ GATE_TICKERS_URL = "https://api.gateio.ws/api/v4/futures/usdt/tickers"
 GATE_CONTRACTS_URL = "https://api.gateio.ws/api/v4/futures/usdt/contracts"
 MAX_RESPONSE_BYTES = 2_000_000
 STATIC_DIR = Path(__file__).resolve().parents[1] / "dashboard"
+XAU_SCOPE_SYMBOLS = {"XAU_USDT", "XAUT_USDT", "PAXG_USDT"}
 
 
 def _decimal(value: object) -> Decimal | None:
@@ -41,6 +48,7 @@ def rank_tickers(
     settings: Settings,
     required_symbols: tuple[str, ...] = (),
     price_increments: dict[str, str] | None = None,
+    contract_metadata: dict[str, dict[str, object]] | None = None,
 ) -> list[dict[str, object]]:
     if not isinstance(payload, list):
         raise ValueError("Gate tickers response is not a list")
@@ -51,6 +59,7 @@ def rank_tickers(
         if not isinstance(item, dict):
             continue
         contract = str(item.get("contract", ""))
+        metadata = (contract_metadata or {}).get(contract, {})
         price_increment = price_increments.get(contract) if price_increments is not None else None
         last = _decimal(item.get("last"))
         bid = _decimal(item.get("highest_bid"))
@@ -101,9 +110,24 @@ def rank_tickers(
             "volume_quote": float(volume),
             "funding_rate": float(funding),
             "price_increment": price_increment,
+            "quantity_increment": metadata.get("quantity_increment"),
+            "minimum_quantity": metadata.get("minimum_quantity"),
+            "contract_enabled": metadata.get("contract_enabled"),
+            "leverage_min": metadata.get("leverage_min"),
+            "leverage_max": metadata.get("leverage_max"),
+            "contract_value": metadata.get("contract_value"),
+            "funding_interval_seconds": metadata.get("funding_interval_seconds"),
+            "funding_next_apply": metadata.get("funding_next_apply"),
+            "margin_mode": "PAPER_SIMULATION",
+            "market_class": "xau" if contract in XAU_SCOPE_SYMBOLS else "crypto",
             "screen_score": round(score, 1),
-            "selected": rejection is None,
-            "rejection": rejection,
+            "selected": rejection is None and contract not in XAU_SCOPE_SYMBOLS,
+            "rejection": (
+                rejection
+                or ("XAU PROFILE" if contract == "XAU_USDT" else "REFERENCE")
+                if contract in XAU_SCOPE_SYMBOLS
+                else rejection
+            ),
         }
         (eligible if rejection is None else rejected).append(market)
 
@@ -116,10 +140,22 @@ def rank_tickers(
         ),
         reverse=True,
     )
-    selected = [market for market in eligible if market["symbol"] in required]
-    selected.extend(market for market in eligible if market["symbol"] not in required)
+    required_crypto = required - XAU_SCOPE_SYMBOLS
+    selected = [market for market in eligible if market["symbol"] in required_crypto]
+    selected.extend(
+        market
+        for market in eligible
+        if market["symbol"] not in required and market["symbol"] not in XAU_SCOPE_SYMBOLS
+    )
     selected = selected[: settings.active_symbols]
-    return selected + rejected[: max(0, 12 - len(selected))]
+    visible = selected + rejected[: max(0, 12 - len(selected))]
+    visible_symbols = {item["symbol"] for item in visible}
+    visible.extend(
+        market
+        for market in (*eligible, *rejected)
+        if market["symbol"] in required and market["symbol"] not in visible_symbols
+    )
+    return visible
 
 
 def fetch_gate_tickers() -> object:
@@ -141,6 +177,47 @@ def fetch_gate_price_increments() -> dict[str, str]:
     if not increments:
         raise RuntimeError("Gate contract price metadata is empty")
     return increments
+
+
+def fetch_gate_contracts() -> dict[str, dict[str, object]]:
+    payload = _fetch_gate_json(GATE_CONTRACTS_URL)
+    if not isinstance(payload, list):
+        raise RuntimeError("Gate contracts response is not a list")
+    contracts: dict[str, dict[str, object]] = {}
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        contract = str(item.get("name", ""))
+        price_increment = _decimal(item.get("order_price_round"))
+        quantity_increment = _decimal(item.get("quanto_multiplier"))
+        minimum_contracts = _decimal(item.get("order_size_min"))
+        leverage_min = _decimal(item.get("leverage_min"))
+        leverage_max = _decimal(item.get("leverage_max"))
+        if (
+            contract.endswith("_USDT")
+            and price_increment is not None
+            and price_increment > 0
+            and quantity_increment is not None
+            and quantity_increment > 0
+            and minimum_contracts is not None
+            and minimum_contracts > 0
+            and leverage_min is not None
+            and leverage_max is not None
+        ):
+            contracts[contract] = {
+                "price_increment": format(price_increment, "f"),
+                "quantity_increment": format(quantity_increment, "f"),
+                "minimum_quantity": format(minimum_contracts * quantity_increment, "f"),
+                "contract_value": format(quantity_increment, "f"),
+                "leverage_min": format(leverage_min, "f"),
+                "leverage_max": format(leverage_max, "f"),
+                "contract_enabled": not bool(item.get("in_delisting", False)),
+                "funding_interval_seconds": item.get("funding_interval"),
+                "funding_next_apply": item.get("funding_next_apply"),
+            }
+    if not contracts:
+        raise RuntimeError("Gate contract price metadata is empty")
+    return contracts
 
 
 def _fetch_gate_json(url: str) -> object:
@@ -174,6 +251,7 @@ class DashboardState:
         *,
         config_path: Path | None = None,
         paper_factory: Callable[[], PaperTrader] | None = None,
+        scope_controller: MarketScopeController | None = None,
     ) -> None:
         self._report = report
         self._settings = settings
@@ -181,6 +259,14 @@ class DashboardState:
         self._tradingview = tradingview
         self._config_path = config_path
         self._paper_factory = paper_factory
+        resolved_scope = scope_controller or getattr(paper, "scope_controller", None)
+        if not isinstance(resolved_scope, MarketScopeController):
+            resolved_scope = MarketScopeController(
+                settings.log_directory / "market-scope.json",
+                settings.log_directory / "market-scope-events.jsonl",
+                settings.market_scope,
+            )
+        self._scope: MarketScopeController = resolved_scope
         self._lock = threading.Lock()
         self._markets: list[dict[str, object]] = []
         self._last_success_monotonic: float | None = None
@@ -404,6 +490,46 @@ class DashboardState:
         with self._lock:
             return self._paper.flatten()
 
+    def market_scope(self) -> dict[str, object]:
+        with self._lock:
+            paper = self._paper.snapshot()
+            return self._scope.snapshot(paper.positions)
+
+    def switch_market_scope(self, payload: object) -> dict[str, object]:
+        if not isinstance(payload, dict):
+            raise ValueError("market-scope payload must be an object")
+        try:
+            target = MarketScope(str(payload.get("scope", "")))
+            policy = SwitchPolicy(str(payload.get("switch_policy", "")))
+        except ValueError as exc:
+            raise ValueError("invalid market scope or switch policy") from exc
+        confirm_flatten = payload.get("confirm_flatten") is True
+        with self._lock:
+            paper = self._paper.snapshot()
+            if target == MarketScope.XAU_ONLY:
+                xau = next(
+                    (
+                        market
+                        for market in self._markets
+                        if market.get("symbol") == self._settings.xau.execution_symbol
+                    ),
+                    None,
+                )
+                if xau is None or xau.get("contract_enabled") is not True:
+                    raise RuntimeError("Gate XAU_USDT contract metadata is unavailable or disabled")
+            record = self._scope.request(
+                target,
+                policy,
+                open_positions=paper.positions,
+                confirm_flatten=confirm_flatten,
+            )
+            if record.switch_status == SwitchState.FLATTENING and not self._paper.flatten():
+                latest = self._paper.snapshot()
+                if latest.positions:
+                    self._scope.fail("safe flatten could not be submitted")
+                    raise RuntimeError("safe flatten could not be submitted")
+            return self._scope.snapshot(self._paper.snapshot().positions)
+
     def start_new_paper_run(self) -> dict[str, object]:
         with self._lock:
             now = time.monotonic()
@@ -532,11 +658,12 @@ class DashboardState:
                 else {}
             )
             symbol_diagnostics = diagnostics.get("symbols", {})
-            quarantined = (
+            raw_quarantined = (
                 symbol_diagnostics.get("quarantined", {})
                 if isinstance(symbol_diagnostics, dict)
                 else {}
             )
+            quarantined = raw_quarantined if isinstance(raw_quarantined, dict) else {}
             markets = [
                 {
                     **market,
@@ -550,9 +677,7 @@ class DashboardState:
                             "status", "NOT_MONITORED"
                         )
                     ),
-                    "quarantine_reason": quarantined.get(str(market.get("symbol")))
-                    if isinstance(quarantined, dict)
-                    else None,
+                    "quarantine_reason": quarantined.get(str(market.get("symbol"))),
                 }
                 for market in self._markets
             ]
@@ -587,16 +712,16 @@ class DashboardState:
                 )
 
             risk = diagnostics.get("risk", {})
-            daily_review = bool(
+            rollover_review = bool(
                 isinstance(risk, dict)
-                and risk.get("state") == "DAILY_LOSS_REVIEW"
+                and risk.get("state") in {"DAILY_LOSS_REVIEW", "MAX_DRAWDOWN_REVIEW"}
                 and risk.get("rollover_review_required") is True
             )
             resume_allowed = (
                 fresh
                 and not self._feed_error
                 and not self._execution_error
-                and (not paper.risk_halted or daily_review)
+                and (not paper.risk_halted or rollover_review)
                 and accounting_state == "VALID"
                 and trading_state != "ACTIVE"
             )
@@ -646,9 +771,13 @@ class DashboardState:
                 "trade_history": paper.trade_history,
                 "orders": paper.orders,
                 "strategy": paper.strategy,
+                "market_scope": self._scope.snapshot(paper.positions),
                 "entry_v3": dict(self._entry_v3),
                 "accounting": accounting,
                 "risk": diagnostics.get("risk", {}),
+                "profitability": diagnostics.get("profitability", {}),
+                "recovery_timing": diagnostics.get("recovery_timing", {}),
+                "experiments": diagnostics.get("experiments", {}),
                 "execution_model": diagnostics.get("execution_model", {}),
                 "run": diagnostics.get("run", {}),
                 "storage": storage,
@@ -661,7 +790,7 @@ class DashboardState:
                     "pause_allowed": trading_state == "ACTIVE",
                     "resume_allowed": resume_allowed,
                     "auto_resume_allowed": (
-                        resume_allowed and not self._manual_paused and not daily_review
+                        resume_allowed and not self._manual_paused and not rollover_review
                     ),
                     "flatten_allowed": paper.positions > 0,
                     "new_paper_run_allowed": new_paper_run_allowed,
@@ -675,6 +804,7 @@ class GatePoller:
         self._settings = settings
         self._logger = logger
         self._price_increments: dict[str, str] | None = None
+        self._contract_metadata: dict[str, dict[str, object]] | None = None
         self._stop = threading.Event()
         self._wake = threading.Event()
         self._poll_lock = threading.Lock()
@@ -701,13 +831,18 @@ class GatePoller:
         with self._poll_lock:
             started = time.monotonic()
             try:
-                if self._price_increments is None:
-                    self._price_increments = fetch_gate_price_increments()
+                if self._contract_metadata is None:
+                    self._contract_metadata = fetch_gate_contracts()
+                    self._price_increments = {
+                        symbol: str(metadata["price_increment"])
+                        for symbol, metadata in self._contract_metadata.items()
+                    }
                 markets = rank_tickers(
                     fetch_gate_tickers(),
                     self._settings,
                     self._state.monitored_symbols,
                     self._price_increments,
+                    self._contract_metadata,
                 )
                 if not any(bool(market["selected"]) for market in markets):
                     raise RuntimeError("no Gate contracts passed the configured filters")
@@ -807,6 +942,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if self.path == "/api/state":
             self._json(HTTPStatus.OK, self.server.state.snapshot())
             return
+        if self.path == "/api/market-scope":
+            self._json(HTTPStatus.OK, self.server.state.market_scope())
+            return
         assets = {
             "/": ("index.html", "text/html; charset=utf-8"),
             "/app.js": ("app.js", "text/javascript; charset=utf-8"),
@@ -837,6 +975,19 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
         body = self.rfile.read(length) if length else b""
 
+        if self.path == "/api/market-scope":
+            try:
+                payload = json.loads(body or b"{}")
+                result = self.server.state.switch_market_scope(payload)
+            except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as exc:
+                self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)[:200]})
+                return
+            except (RuntimeError, OSError) as exc:
+                self._json(HTTPStatus.CONFLICT, {"error": str(exc)[:200]})
+                return
+            self.server.logger.info("Market scope state: %s", json.dumps(result))
+            self._json(HTTPStatus.OK, result)
+            return
         if self.path == "/api/control/pause":
             self.server.state.pause()
         elif self.path == "/api/control/resume":
@@ -917,7 +1068,12 @@ def _logger(settings: Settings) -> logging.Logger:
 def run_dashboard(settings: Settings, config_path: Path | None = None) -> None:
     report = run_paper_smoke(settings)
     logger = _logger(settings)
-    paper = PaperTrader(report, settings, logger)
+    scope = MarketScopeController(
+        settings.log_directory / "market-scope.json",
+        settings.log_directory / "market-scope-events.jsonl",
+        settings.market_scope,
+    )
+    paper = PaperTrader(report, settings, logger, scope)
     tradingview = build_tradingview_monitor(settings, logger)
     resolved_config = (config_path or Path("config/paper.toml")).resolve()
     state = DashboardState(
@@ -926,7 +1082,8 @@ def run_dashboard(settings: Settings, config_path: Path | None = None) -> None:
         paper,
         tradingview,
         config_path=resolved_config,
-        paper_factory=lambda: PaperTrader(report, settings, logger),
+        paper_factory=lambda: PaperTrader(report, settings, logger, scope),
+        scope_controller=scope,
     )
     poller = GatePoller(state, settings, logger)
     server = DashboardServer(

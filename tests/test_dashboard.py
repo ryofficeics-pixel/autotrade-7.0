@@ -58,7 +58,7 @@ class DashboardTests(unittest.TestCase):
                 return False
 
             def authorize_resume(self) -> bool:
-                if self.risk_state == "DAILY_LOSS_REVIEW":
+                if self.risk_state in {"DAILY_LOSS_REVIEW", "MAX_DRAWDOWN_REVIEW"}:
                     self.risk_halted = False
                     self.risk_state = "OK"
                 return self.accounting_state == "VALID" and not self.risk_halted
@@ -99,7 +99,8 @@ class DashboardTests(unittest.TestCase):
                         "accounting": {"state": self.accounting_state, "reason": None},
                         "risk": {
                             "state": self.risk_state,
-                            "rollover_review_required": self.risk_state == "DAILY_LOSS_REVIEW",
+                            "rollover_review_required": self.risk_state
+                            in {"DAILY_LOSS_REVIEW", "MAX_DRAWDOWN_REVIEW"},
                         },
                         "execution_model": {"state": "PAPER_SIM"},
                         "run": {},
@@ -289,6 +290,25 @@ class DashboardTests(unittest.TestCase):
         paper = self.paper()
         paper.risk_halted = True  # type: ignore[attr-defined]
         paper.risk_state = "DAILY_LOSS_REVIEW"  # type: ignore[attr-defined]
+        state = DashboardState(
+            report,
+            self.settings(),
+            paper,  # type: ignore[arg-type]
+            self.tradingview(),  # type: ignore[arg-type]
+        )
+        state.apply_snapshot([{"selected": True}], 10, monotonic_now=100)
+
+        halted = state.snapshot(monotonic_now=100)
+        self.assertTrue(halted["controls"]["resume_allowed"])  # type: ignore[index]
+        self.assertFalse(halted["controls"]["auto_resume_allowed"])  # type: ignore[index]
+        self.assertTrue(state.resume(monotonic_now=100))
+        self.assertEqual(state.snapshot(monotonic_now=100)["trading_state"], "ACTIVE")
+
+    def test_max_drawdown_rollover_allows_only_manual_resume(self) -> None:
+        report = RuntimeReport("PAPER", "test", "TESTER-001", "GATE", "300", "1", True, True)
+        paper = self.paper()
+        paper.risk_halted = True  # type: ignore[attr-defined]
+        paper.risk_state = "MAX_DRAWDOWN_REVIEW"  # type: ignore[attr-defined]
         state = DashboardState(
             report,
             self.settings(),

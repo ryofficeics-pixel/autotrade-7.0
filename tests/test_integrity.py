@@ -35,7 +35,7 @@ class IntegrityTests(unittest.TestCase):
             starting_equity=Decimal("300"),
         )
         state_path = root / "paper-state.json"
-        state = json.loads(state_path.read_text(encoding="utf-8"))
+        state: dict[str, object] = json.loads(state_path.read_text(encoding="utf-8"))
         ledger = EventLedger(
             root / str(state["event_ledger_path"]),
             str(metadata["run_id"]),
@@ -45,7 +45,7 @@ class IntegrityTests(unittest.TestCase):
         position_id = new_identity()
         order_id = new_identity()
         now = utc_now()
-        specs = [
+        specs: list[tuple[str, dict[str, object]]] = [
             (
                 "signal",
                 {
@@ -229,9 +229,9 @@ class IntegrityTests(unittest.TestCase):
                 root = Path(directory)
                 ledger, state_path, checkpoint, specs = self._open_transition(root)
 
-                def fail(current: str) -> None:
-                    if current == boundary:
-                        raise OSError(f"crash at {boundary}")
+                def fail(current: str, *, crash_boundary: str = boundary) -> None:
+                    if current == crash_boundary:
+                        raise OSError(f"crash at {crash_boundary}")
 
                 with self.assertRaisesRegex(OSError, boundary):
                     commit_transition(
