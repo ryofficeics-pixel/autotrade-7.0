@@ -1092,7 +1092,7 @@ def run_dashboard(settings: Settings, config_path: Path | None = None) -> None:
     tradingview.start()
     poller.poll_once()
     shadow = EntryV3ShadowRunner(state, settings, logger)
-    shadow.start(state.monitored_symbols)
+    shadow.start(paper.shadow_symbols)
     poller.start()
     logger.info("Dashboard started on http://%s:%s", *server.server_address)
     print(

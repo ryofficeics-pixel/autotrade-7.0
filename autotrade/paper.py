@@ -781,6 +781,14 @@ class PaperTrader:
         return tuple(dict.fromkeys((*self._strategies, *self._scope.required_symbols)))
 
     @property
+    def shadow_symbols(self) -> tuple[str, ...]:
+        return tuple(
+            symbol
+            for symbol in self.monitored_symbols
+            if symbol not in self._scope.required_symbols
+        )
+
+    @property
     def scope_controller(self) -> MarketScopeController:
         return self._scope
 

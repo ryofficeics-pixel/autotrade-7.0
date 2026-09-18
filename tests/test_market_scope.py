@@ -273,6 +273,10 @@ class MarketScopeIntegrationTests(unittest.TestCase):
                 xau_strategy = trader._strategies["XAU_USDT"]
                 self.assertEqual(xau_strategy.config.size_increment, Decimal("0.0001"))
                 self.assertEqual(xau_strategy.config.size_precision, 4)
+                self.assertIn("BTC_USDT", trader.shadow_symbols)
+                self.assertNotIn("XAU_USDT", trader.shadow_symbols)
+                self.assertNotIn("XAUT_USDT", trader.shadow_symbols)
+                self.assertNotIn("PAXG_USDT", trader.shadow_symbols)
                 self.assertEqual(trader.snapshot().positions, 0)
                 for index in range(1, 7):
                     trader.process(
