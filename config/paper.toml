@@ -37,6 +37,39 @@ entry_threshold_bps = "12"
 high_volatility_bps = "16"
 low_volatility_bps = "3"
 
+[xau.ama_control]
+enabled = true
+execution_enabled = false
+fast_period = 10
+control_period = 20
+slow_period = 50
+kama_fast = 2
+kama_slow = 30
+atr_proxy_window = 20
+atr_multiplier = "1.50"
+minimum_hysteresis_bps = "3"
+minimum_slope_bps = "0.10"
+maximum_distance_bps = "50"
+minimum_net_edge_bps = "3"
+minimum_confidence = "0.55"
+minimum_regime_observations = 3
+maximum_spread_bps = "8"
+minimum_quote_volume_usdt = "1000000"
+maximum_reference_dispersion_bps = "25"
+maximum_reference_dislocation_bps = "35"
+reference_required = false
+notional_usdt = "15"
+maximum_holding_seconds = 900
+round_trip_fee_bps = "10"
+slippage_bps_per_side = "2"
+funding_buffer_bps = "3"
+stressed_cost_multiplier = "1.50"
+minimum_comparison_trades = 30
+quarantine_minimum_trades = 30
+quarantine_profit_factor = "0.80"
+decision_interval_seconds = 30
+report_interval_seconds = 60
+
 [xau.confirmations]
 enabled = true
 required = false

@@ -218,6 +218,51 @@ function renderProfitability(profitability = {}, experiments = {}) {
   $("evidence-status").className = `badge ${evidence === "VALIDATED PAPER CANDIDATE" ? "paper" : "neutral"}`;
 }
 
+function renderAma(ama = {}) {
+  const state = ama.status || "UNAVAILABLE";
+  text("ama-status", state.replaceAll("_", " "));
+  $("ama-status").className = `badge ${state === "COLLECTING" ? "paper" : "neutral"}`;
+  text("ama-price", Number.isFinite(ama.price) ? `$${price(ama.price)}` : "N/A");
+  const kama = ama.kama || {};
+  const displayKama = (value) => Number.isFinite(value) ? `$${price(value)}` : "N/A";
+  text("ama-values", `${displayKama(kama["10"])} / ${displayKama(kama["20"])} / ${displayKama(kama["50"])}`);
+  text("ama-regime", (ama.regime || "UNKNOWN").replaceAll("_", " "));
+  text("ama-signals", `${ama.raw_signal || "WAIT"} / ${ama.filtered_signal || "WAIT"}`);
+  text("ama-hysteresis", Number.isFinite(ama.hysteresis_bps) ? `${ama.hysteresis_bps.toFixed(2)} bps` : "N/A");
+  text("ama-quality", (ama.quality_decision || "WARMING_UP").replaceAll("_", " "));
+  const reference = ama.reference || {};
+  const dislocation = Number.isFinite(reference.dislocation_bps) ? ` · ${signed(reference.dislocation_bps, 2)} bps` : "";
+  text("ama-reference", `${reference.status || "UNAVAILABLE"}${dislocation}`);
+  text("ama-evidence", `${ama.evidence_integrity || "UNKNOWN"} · ${ama.observations || 0} observations`);
+
+  const strategies = ama.strategies || {};
+  const labels = [
+    ["CURRENT_PAPER_BASELINE", "Current PAPER baseline"],
+    ["XAU_KAMA20_RAW_V2", "KAMA20 raw"],
+    ["XAU_KAMA20_FILTERED_V2", "KAMA20 filtered"],
+    ["XAU_FAIR_VALUE_V1", "Fair value"],
+    ["XAU_COMBINED_V1", "Combined"],
+    ["ENTRY_V3", "Entry V3"],
+  ];
+  const rows = labels.map(([id, label]) => {
+    const metrics = strategies[id] || {};
+    const row = document.createElement("tr");
+    cell(row, label, "symbol");
+    cell(row, (metrics.status || "UNAVAILABLE").replaceAll("_", " "));
+    cell(row, String(metrics.trades || 0));
+    cell(row, metricMoney(metrics.net_pnl_usdt));
+    cell(row, Number.isFinite(metrics.profit_factor) ? metrics.profit_factor.toFixed(2) : "N/A");
+    cell(row, Number.isFinite(metrics.max_drawdown_usdt) ? `$${money.format(metrics.max_drawdown_usdt)}` : "N/A");
+    cell(row, (metrics.sample_status || "INSUFFICIENT_EVIDENCE").replaceAll("_", " "));
+    return row;
+  });
+  $("ama-comparison-rows").replaceChildren(...rows);
+  const comparison = ama.comparison || {};
+  text("ama-complexity", `Complexity alpha: ${(comparison.complexity_alpha || "UNPROVEN").replaceAll("_", " ")} · ${comparison.status || "INSUFFICIENT EVIDENCE"} · no automatic promotion.`);
+  text("ama-strategy-status", `${state} · EXECUTION DISABLED`);
+  text("ama-strategy-detail", `${ama.filtered_signal || "WAIT"} after quality gate · ${ama.counterfactual_pending || 0} pending counterfactuals · no order path.`);
+}
+
 function render(state) {
   latestState = state;
   const accounting = state.accounting || { state: "INVALID", reason: "Accounting diagnostics unavailable." };
@@ -273,8 +318,8 @@ function render(state) {
   text("recovery-action", (recoveryTiming.recovery_action || "NONE").replaceAll("_", " "));
   const freeBytes = state.storage?.free_disk_bytes;
   text("free-disk", Number.isFinite(freeBytes) ? `${(freeBytes / 1_000_000_000).toFixed(1)} GB · ${state.storage.free_disk_percent.toFixed(1)}%` : "N/A");
-  text("strategy-status", "BASELINE · EXECUTION DISABLED");
-  text("strategy-detail", "Frozen comparison baseline. It cannot submit PAPER orders.");
+  text("strategy-status", state.strategy?.armed ? "PAPER ACTIVE" : "PAPER PAUSED");
+  text("strategy-detail", "Current PAPER execution baseline. Orders remain behind scope, risk, freshness, accounting, and final entry guards.");
   const v3 = state.entry_v3 || {};
   text("entry-v3-status", `${v3.strategy_status || "SHADOW"} · ${v3.status || "DISABLED"}`);
   const latest = v3.latest_candidate || {};
@@ -308,6 +353,7 @@ function render(state) {
   renderMarkets(state.markets);
   renderTradeHistory(state.trade_history);
   renderProfitability(state.profitability, state.experiments);
+  renderAma(state.ama_control || state.strategy?.ama_control || {});
 
   const alerts = state.alerts.map((message) => {
     const alert = document.createElement("p");
@@ -343,6 +389,7 @@ function disconnected() {
   renderTradingView({ status: "UNAVAILABLE", error: "Backend state unavailable." });
   renderTradeHistory([]);
   renderProfitability({}, {});
+  renderAma({ status: "UNAVAILABLE", evidence_integrity: "UNKNOWN" });
 }
 
 async function switchScope(target) {

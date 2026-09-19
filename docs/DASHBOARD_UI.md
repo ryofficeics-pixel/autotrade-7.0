@@ -221,3 +221,15 @@ Order-book visualization is optional and should not block Phase 1.
 Every dashboard metric must come from authoritative backend state.
 
 Never calculate portfolio truth separately in the browser.
+
+## AMA Control Panel
+
+The AMA control panel remains visible in both market scopes. It shows current XAU price, KAMA 10/20/50,
+regime, raw and filtered signals, hysteresis, quality-gate decision, reference state, evidence integrity,
+and observation count. A comparison table shows raw, filtered, fair-value reference, combined, and V3
+rows. Unsupported families must say `NOT IMPLEMENTED`, `REFERENCE ONLY`, or `SEPARATE CAPTURE TIMELINE`;
+the browser must not synthesize performance.
+
+The panel must state that execution influence is none, show insufficient samples explicitly, and never
+offer promotion or execution controls. Loading, backend-loss, empty, and mobile states use the same
+fail-closed behavior as the rest of the dashboard.

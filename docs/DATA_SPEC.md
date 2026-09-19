@@ -99,3 +99,26 @@ the local book and rebuilding from a fresh snapshot before that symbol can be tr
 During Phase 1 collect continuously while the laptop is running.
 
 Do not prematurely aggregate away raw data required for later replay.
+
+## AMA Control Evidence
+
+The independent XAU control writes schema-v2, append-only, hash-chained JSONL to
+`data/runs/<run_id>/ama-control-v2.jsonl`. Every accepted poll receives one observation identity.
+Paired raw and filtered KAMA20 candidate records are emitted on a decision-state change or at the
+configured 30-second evaluation cadence. Records include run/session,
+strategy/version/parameter identity, UTC observation time, market inputs, KAMA values, quote-step ATR
+proxy, hysteresis, regime, reference state, risk notional, execution assumptions, allow/reject reason,
+and an initially empty outcome.
+
+Counterfactual outcomes are appended only after later observations cross 10-second, 30-second,
+1-minute, 3-minute, 5-minute, and 15-minute horizons. They retain the original decision identity and
+label avoided loss or missed opportunity only from the later observed price. No future value is added
+to the original decision record.
+
+The ATR field is explicitly a quote-step movement proxy, not candle true range. REST poll receive time
+is the observation clock because the ticker endpoint does not provide a reliable event timestamp for
+this control. These limitations must remain visible in audit conclusions.
+
+The control atomically refreshes the requested `reports/*_latest.md` research surfaces plus structured
+JSON summaries. `reports/` is intentionally Git-ignored because those files are continuously rewritten
+runtime derivatives; the hash-chained run dataset is the evidence source of truth.

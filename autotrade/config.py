@@ -8,6 +8,7 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
+from autotrade.ama_control import AmaControlSettings
 from autotrade.market_scope import MarketScope, SwitchPolicy, XauSettings
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -114,6 +115,7 @@ class Settings:
     market_scope: MarketScope
     mode_switch_policy: SwitchPolicy
     xau: XauSettings
+    ama_control: AmaControlSettings
     entry_v3: EntryV3Settings
     experiments: ExperimentSettings
     dashboard_host: str
@@ -204,6 +206,7 @@ def load_settings(path: Path | str = DEFAULT_CONFIG_PATH) -> Settings:
     xau = _optional_table(document, "xau")
     confirmations = _optional_table(xau, "confirmations")
     xau_risk = _optional_table(xau, "risk")
+    ama_control = _optional_table(xau, "ama_control")
 
     mode = os.getenv("TRADING_MODE", str(trading.get("mode", ""))).strip().upper()
     live_enabled = _boolean(
@@ -377,6 +380,114 @@ def load_settings(path: Path | str = DEFAULT_CONFIG_PATH) -> Settings:
         maximum_holding_seconds=_integer(
             xau_risk.get("maximum_holding_seconds", 300),
             "xau.risk.maximum_holding_seconds",
+        ),
+    )
+    ama_control_settings = AmaControlSettings(
+        enabled=_boolean(ama_control.get("enabled", True), "xau.ama_control.enabled"),
+        execution_enabled=_boolean(
+            ama_control.get("execution_enabled", False),
+            "xau.ama_control.execution_enabled",
+        ),
+        fast_period=_integer(ama_control.get("fast_period", 10), "xau.ama_control.fast_period"),
+        control_period=_integer(
+            ama_control.get("control_period", 20), "xau.ama_control.control_period"
+        ),
+        slow_period=_integer(ama_control.get("slow_period", 50), "xau.ama_control.slow_period"),
+        kama_fast=_integer(ama_control.get("kama_fast", 2), "xau.ama_control.kama_fast"),
+        kama_slow=_integer(ama_control.get("kama_slow", 30), "xau.ama_control.kama_slow"),
+        atr_proxy_window=_integer(
+            ama_control.get("atr_proxy_window", 20), "xau.ama_control.atr_proxy_window"
+        ),
+        atr_multiplier=_decimal(
+            ama_control.get("atr_multiplier", "1.50"), "xau.ama_control.atr_multiplier"
+        ),
+        minimum_hysteresis_bps=_decimal(
+            ama_control.get("minimum_hysteresis_bps", "3"),
+            "xau.ama_control.minimum_hysteresis_bps",
+        ),
+        minimum_slope_bps=_decimal(
+            ama_control.get("minimum_slope_bps", "0.10"),
+            "xau.ama_control.minimum_slope_bps",
+        ),
+        maximum_distance_bps=_decimal(
+            ama_control.get("maximum_distance_bps", "50"),
+            "xau.ama_control.maximum_distance_bps",
+        ),
+        minimum_net_edge_bps=_decimal(
+            ama_control.get("minimum_net_edge_bps", "3"),
+            "xau.ama_control.minimum_net_edge_bps",
+        ),
+        minimum_confidence=_decimal(
+            ama_control.get("minimum_confidence", "0.55"),
+            "xau.ama_control.minimum_confidence",
+        ),
+        minimum_regime_observations=_integer(
+            ama_control.get("minimum_regime_observations", 3),
+            "xau.ama_control.minimum_regime_observations",
+        ),
+        maximum_spread_bps=_decimal(
+            ama_control.get("maximum_spread_bps", str(xau_settings.maximum_spread_bps)),
+            "xau.ama_control.maximum_spread_bps",
+        ),
+        minimum_quote_volume_usdt=_decimal(
+            ama_control.get("minimum_quote_volume_usdt", "1000000"),
+            "xau.ama_control.minimum_quote_volume_usdt",
+        ),
+        maximum_reference_dispersion_bps=_decimal(
+            ama_control.get("maximum_reference_dispersion_bps", "25"),
+            "xau.ama_control.maximum_reference_dispersion_bps",
+        ),
+        maximum_reference_dislocation_bps=_decimal(
+            ama_control.get("maximum_reference_dislocation_bps", "35"),
+            "xau.ama_control.maximum_reference_dislocation_bps",
+        ),
+        reference_required=_boolean(
+            ama_control.get("reference_required", False),
+            "xau.ama_control.reference_required",
+        ),
+        notional_usdt=_decimal(
+            ama_control.get("notional_usdt", str(xau_settings.maximum_position_notional_usdt)),
+            "xau.ama_control.notional_usdt",
+        ),
+        maximum_holding_seconds=_integer(
+            ama_control.get("maximum_holding_seconds", 900),
+            "xau.ama_control.maximum_holding_seconds",
+        ),
+        round_trip_fee_bps=_decimal(
+            ama_control.get("round_trip_fee_bps", "10"),
+            "xau.ama_control.round_trip_fee_bps",
+        ),
+        slippage_bps_per_side=_decimal(
+            ama_control.get("slippage_bps_per_side", str(xau_settings.slippage_bps)),
+            "xau.ama_control.slippage_bps_per_side",
+        ),
+        funding_buffer_bps=_decimal(
+            ama_control.get("funding_buffer_bps", "3"),
+            "xau.ama_control.funding_buffer_bps",
+        ),
+        stressed_cost_multiplier=_decimal(
+            ama_control.get("stressed_cost_multiplier", "1.50"),
+            "xau.ama_control.stressed_cost_multiplier",
+        ),
+        minimum_comparison_trades=_integer(
+            ama_control.get("minimum_comparison_trades", 30),
+            "xau.ama_control.minimum_comparison_trades",
+        ),
+        quarantine_minimum_trades=_integer(
+            ama_control.get("quarantine_minimum_trades", 30),
+            "xau.ama_control.quarantine_minimum_trades",
+        ),
+        quarantine_profit_factor=_decimal(
+            ama_control.get("quarantine_profit_factor", "0.80"),
+            "xau.ama_control.quarantine_profit_factor",
+        ),
+        decision_interval_seconds=_integer(
+            ama_control.get("decision_interval_seconds", 30),
+            "xau.ama_control.decision_interval_seconds",
+        ),
+        report_interval_seconds=_integer(
+            ama_control.get("report_interval_seconds", 60),
+            "xau.ama_control.report_interval_seconds",
         ),
     )
     entry_v3_settings = EntryV3Settings(
@@ -721,6 +832,68 @@ def load_settings(path: Path | str = DEFAULT_CONFIG_PATH) -> Settings:
         )
     ):
         raise ConfigError("XAU size factors must be greater than 0 and no more than 1")
+    if ama_control_settings.execution_enabled:
+        raise ConfigError("xau.ama_control.execution_enabled must remain false")
+    if not (
+        2
+        <= ama_control_settings.fast_period
+        < ama_control_settings.control_period
+        < ama_control_settings.slow_period
+        <= 240
+    ):
+        raise ConfigError("AMA periods must satisfy 2 <= fast < control < slow <= 240")
+    if not 1 <= ama_control_settings.kama_fast < ama_control_settings.kama_slow <= 240:
+        raise ConfigError("AMA KAMA smoothing periods are invalid")
+    if not 2 <= ama_control_settings.atr_proxy_window <= 240:
+        raise ConfigError("AMA atr_proxy_window must be between 2 and 240")
+    if (
+        min(
+            ama_control_settings.atr_multiplier,
+            ama_control_settings.minimum_hysteresis_bps,
+            ama_control_settings.minimum_slope_bps,
+            ama_control_settings.maximum_distance_bps,
+            ama_control_settings.minimum_net_edge_bps,
+            ama_control_settings.minimum_confidence,
+            ama_control_settings.maximum_spread_bps,
+            ama_control_settings.maximum_reference_dispersion_bps,
+            ama_control_settings.maximum_reference_dislocation_bps,
+            ama_control_settings.round_trip_fee_bps,
+            ama_control_settings.stressed_cost_multiplier,
+        )
+        <= 0
+    ):
+        raise ConfigError("AMA thresholds and cost assumptions must be positive")
+    if ama_control_settings.maximum_distance_bps <= ama_control_settings.minimum_hysteresis_bps:
+        raise ConfigError("AMA maximum_distance_bps must exceed minimum_hysteresis_bps")
+    if ama_control_settings.minimum_confidence > 1:
+        raise ConfigError("AMA minimum_confidence must be no more than 1")
+    if not 1 <= ama_control_settings.minimum_regime_observations <= 20:
+        raise ConfigError("AMA minimum_regime_observations must be between 1 and 20")
+    if ama_control_settings.minimum_quote_volume_usdt < 0:
+        raise ConfigError("AMA minimum_quote_volume_usdt must not be negative")
+    if ama_control_settings.notional_usdt <= 0 or (
+        ama_control_settings.notional_usdt > xau_settings.maximum_position_notional_usdt
+    ):
+        raise ConfigError("AMA shadow notional must be positive and no larger than XAU PAPER cap")
+    if ama_control_settings.maximum_holding_seconds <= market_poll_seconds:
+        raise ConfigError("AMA maximum_holding_seconds must exceed the poll interval")
+    if (
+        ama_control_settings.slippage_bps_per_side < 0
+        or ama_control_settings.funding_buffer_bps < 0
+    ):
+        raise ConfigError("AMA slippage and funding buffers must not be negative")
+    if (
+        min(
+            ama_control_settings.minimum_comparison_trades,
+            ama_control_settings.quarantine_minimum_trades,
+            ama_control_settings.decision_interval_seconds,
+            ama_control_settings.report_interval_seconds,
+        )
+        < 1
+    ):
+        raise ConfigError("AMA sample, decision, and report intervals must be positive")
+    if ama_control_settings.quarantine_profit_factor <= 0:
+        raise ConfigError("AMA quarantine profit factor must be positive")
     if not 1 <= entry_v3_settings.book_depth <= 20:
         raise ConfigError("entry_v3.book.depth must be between 1 and 20")
     if entry_v3_settings.execution_enabled:
@@ -873,6 +1046,7 @@ def load_settings(path: Path | str = DEFAULT_CONFIG_PATH) -> Settings:
         market_scope=market_scope,
         mode_switch_policy=mode_switch_policy,
         xau=xau_settings,
+        ama_control=ama_control_settings,
         entry_v3=entry_v3_settings,
         experiments=experiment_settings,
         dashboard_host=dashboard_host,

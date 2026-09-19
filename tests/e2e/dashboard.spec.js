@@ -34,6 +34,22 @@ test("paper dashboard is truthful and controls fail closed", async ({ page }) =>
     strategy: { name: "REST Momentum", symbol: "ETH_USDT", status: "PAUSED", armed: false, expected_gross_bps: 0, expected_cost_bps: 0, expected_net_bps: 0, last_signal: null, xau: { direction: "LONG", confidence: 0.78, regime: "TRENDING_UP", volatility: "NORMAL", confirmation: "AGREE", reasons: ["QUALIFIED"], feed_health: { XAU_USDT: "HEALTHY", XAUT_USDT: "HEALTHY", PAXG_USDT: "HEALTHY" }, contract_status: "VALID" } },
     market_scope: { active_scope: "WIDE_CRYPTO", requested_scope: null, switch_status: "ACTIVE", switch_policy: null, open_positions: 0, blocking_reason: null, execution_symbol: "DYNAMIC" },
     entry_v3: { status: "LIVE", strategy_status: "SHADOW", execution_enabled: false, candidate_count: 3, accepted_count: 1, rejected_count: 2, latest_candidate: { decision: "REJECTED", direction: "LONG" } },
+    ama_control: {
+      name: "XAU_KAMA20_CONTROL_V2", status: "COLLECTING", execution_enabled: false, execution_influence: "NONE",
+      evidence_integrity: "VALID", observations: 74, price: 3680.25,
+      kama: { "10": 3679.8, "20": 3679.2, "50": 3678.4 }, atr_proxy_bps: 2.1, hysteresis_bps: 17.27,
+      regime: "UPTREND", raw_signal: "LONG", filtered_signal: "WAIT", quality_decision: "HYSTERESIS_BAND",
+      reference: { status: "HEALTHY", dislocation_bps: 4.08 }, counterfactual_pending: 18,
+      strategies: {
+        CURRENT_PAPER_BASELINE: { status: "RUN_LEDGER_NOT_SAME_TIMELINE", trades: 315, net_pnl_usdt: -18.39, profit_factor: 0.5, max_drawdown_usdt: 19.2, sample_status: "NOT_COMPARABLE" },
+        XAU_KAMA20_RAW_V2: { status: "SHADOW", trades: 4, net_pnl_usdt: -0.12, profit_factor: 0.72, max_drawdown_usdt: 0.2, sample_status: "INSUFFICIENT_EVIDENCE" },
+        XAU_KAMA20_FILTERED_V2: { status: "SHADOW", trades: 2, net_pnl_usdt: 0.03, profit_factor: 1.1, max_drawdown_usdt: 0.04, sample_status: "INSUFFICIENT_EVIDENCE" },
+        XAU_FAIR_VALUE_V1: { status: "REFERENCE_ONLY", trades: 0 },
+        XAU_COMBINED_V1: { status: "NOT_IMPLEMENTED", trades: 0 },
+        ENTRY_V3: { status: "SEPARATE_CAPTURE_TIMELINE", trades: 0 },
+      },
+      comparison: { status: "INSUFFICIENT_EVIDENCE", complexity_alpha: "UNPROVEN", promotion_eligible: false },
+    },
     tradingview: { enabled: false, status: "DISABLED", advisory_only: true, execution_influence: "NONE", symbol: null, expected_symbol: "GATE:ETHUSDT.P", timeframe: null, expected_timeframe: "5", bias: "UNAVAILABLE", confidence: null, regime: "UNAVAILABLE", latency_ms: null, freshness_ms: null, pine_signal: "UNAVAILABLE", nautilus_agreement: "UNAVAILABLE", error: null },
     markets: [
       { symbol: "BTC_USDT", last: 78713.6, change_pct: -0.08, bid: 78702.7, ask: 78702.8, spread_bps: 0.013, volume_quote: 29360000000, funding_rate: -0.000007, screen_score: 62.4, selected: true, rejection: null },
@@ -94,6 +110,12 @@ test("paper dashboard is truthful and controls fail closed", async ({ page }) =>
   await expect(page.locator("#full-net")).toHaveText("+$1.00");
   await page.locator("#analytics-scope").selectOption("ALL");
   await expect(page.locator("#tv-status")).toHaveText("DISABLED");
+  await expect(page.locator("#ama-control")).toBeVisible();
+  await expect(page.locator("#ama-status")).toHaveText("COLLECTING");
+  await expect(page.locator("#ama-signals")).toHaveText("LONG / WAIT");
+  await expect(page.locator("#ama-comparison-rows tr")).toHaveCount(6);
+  await expect(page.locator("#ama-complexity")).toContainText("UNPROVEN");
+  await expect(page.locator("#ama-strategy-status")).toContainText("EXECUTION DISABLED");
   await page.screenshot({ path: "test-results/dashboard-overview.png", fullPage: true });
 
   await page.getByRole("button", { name: "XAU ONLY" }).click();

@@ -144,6 +144,19 @@ completed dataset and reproduce its final local-book digest with:
 .venv\Scripts\python.exe -m autotrade replay-verify --dataset data\gate-captures\DATASET_ID
 ```
 
+## Independent XAU KAMA Control
+
+The PAPER service now runs `XAU_KAMA20_CONTROL_V2` continuously from the retained XAU/XAUT/PAXG REST
+poll, regardless of entry scope. It compares raw and filtered KAMA20 shadows on one observation
+timeline, records deterministic rejection reasons and later counterfactual outcomes, and publishes
+read-only strategy/reference/realism reports under `reports/`.
+
+This control is research-only. Configuration rejects `xau.ama_control.execution_enabled = true`, the
+engine has no order-submission reference, and the dashboard has no AMA execution control. V2 enforces
+the documented price-plus-KAMA20-slope raw signal and keeps its evidence separate from the superseded
+pre-validation V1 stream. Its quote-step
+ATR is not candle ATR, and its modeled profiles do not prove achievable fills.
+
 ## Optional TradingView Research Sidecar
 
 The pinned TradingView MCP checkout is an optional local health/research sidecar. The paper profile

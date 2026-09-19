@@ -89,6 +89,8 @@ class SettingsTests(unittest.TestCase):
         self.assertTrue(settings.entry_v3.enabled)
         self.assertTrue(settings.entry_v3.shadow_enabled)
         self.assertFalse(settings.entry_v3.execution_enabled)
+        self.assertTrue(settings.ama_control.enabled)
+        self.assertFalse(settings.ama_control.execution_enabled)
 
     def test_entry_v3_execution_is_rejected(self) -> None:
         with self.assertRaisesRegex(ConfigError, "execution_enabled must remain false"):

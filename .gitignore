@@ -13,4 +13,5 @@ logs/
 *.sqlite
 playwright-report/
 test-results/
+reports/
 vendor/tradingview-mcp/

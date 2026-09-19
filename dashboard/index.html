@@ -24,6 +24,7 @@
     <a class="active" href="#overview">Overview</a>
     <a href="#markets">Markets</a>
     <a href="#analytics">Analytics</a>
+    <a href="#ama-control">AMA Control</a>
     <a href="#trades">Trades</a>
     <a href="#strategies">Strategies</a>
     <a href="#health">Health</a>
@@ -92,6 +93,30 @@
         <div><span>Leverage / Risk</span><strong id="xau-leverage-risk">1x / PAPER</strong></div>
       </div>
       <p id="xau-reason" class="analytics-note">Waiting for XAU market data.</p>
+    </section>
+
+    <section id="ama-control" class="panel ama-panel" aria-labelledby="ama-title">
+      <header>
+        <div><p class="eyebrow">INDEPENDENT RESEARCH · NO EXECUTION INFLUENCE</p><h2 id="ama-title">XAU KAMA/AMA20 Control</h2></div>
+        <span id="ama-status" class="badge neutral" aria-live="polite">CHECKING</span>
+      </header>
+      <div class="ama-grid">
+        <div><span>Price</span><strong id="ama-price">N/A</strong></div>
+        <div><span>KAMA 10 / 20 / 50</span><strong id="ama-values">N/A / N/A / N/A</strong></div>
+        <div><span>Regime</span><strong id="ama-regime">UNKNOWN</strong></div>
+        <div><span>Raw / filtered</span><strong id="ama-signals">WAIT / WAIT</strong></div>
+        <div><span>Hysteresis</span><strong id="ama-hysteresis">N/A</strong></div>
+        <div><span>Quality gate</span><strong id="ama-quality">WARMING UP</strong></div>
+        <div><span>Reference</span><strong id="ama-reference">UNAVAILABLE</strong></div>
+        <div><span>Evidence</span><strong id="ama-evidence">CHECKING</strong></div>
+      </div>
+      <div class="table-wrap">
+        <table class="ama-table">
+          <thead><tr><th>Shadow family</th><th>Status</th><th>Closed trades</th><th>Net</th><th>Profit factor</th><th>Max drawdown</th><th>Evidence</th></tr></thead>
+          <tbody id="ama-comparison-rows"><tr><td colspan="7" class="empty">Waiting for same-timeline XAU observations.</td></tr></tbody>
+        </table>
+      </div>
+      <p id="ama-complexity" class="analytics-note">Complexity alpha is unproven. Manual promotion is required.</p>
     </section>
 
     <section id="accounting-banner" class="integrity-banner checking" aria-live="assertive">
@@ -219,8 +244,9 @@
     <section id="strategies" class="panel strategies">
       <header><div><p class="eyebrow">STRATEGY LAB</p><h2>Challengers</h2></div><span id="strategy-badge" class="badge neutral">CHECKING</span></header>
       <div class="strategy-grid">
-        <article><strong>REST Momentum V2</strong><span id="strategy-status">BASELINE</span><p id="strategy-detail">Frozen comparison baseline. Order submission is disabled.</p></article>
+        <article><strong>REST Momentum V2</strong><span id="strategy-status">CHECKING</span><p id="strategy-detail">Current PAPER execution baseline.</p></article>
         <article><strong>Microstructure Entry V3</strong><span id="entry-v3-status">CHECKING</span><p id="entry-v3-detail">Waiting for the causal Gate WebSocket shadow feed.</p></article>
+        <article><strong>XAU KAMA20 Control V2</strong><span id="ama-strategy-status">CHECKING</span><p id="ama-strategy-detail">Independent shadow control. It cannot submit orders.</p></article>
       </div>
     </section>
   </main>

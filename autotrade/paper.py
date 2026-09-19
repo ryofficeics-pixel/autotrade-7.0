@@ -34,6 +34,7 @@ from nautilus_trader.model.instruments import CryptoPerpetual
 from nautilus_trader.model.objects import Currency, Money, Price, Quantity
 from nautilus_trader.trading.strategy import Strategy
 
+from autotrade.ama_control import AmaControlEngine
 from autotrade.analytics import aggregate_trades, classify_close, reconstruct_trades
 from autotrade.config import Settings
 from autotrade.experiments import (
@@ -770,6 +771,16 @@ class PaperTrader:
         if self._run_id is not None:
             self._trade_history = self._load_trade_history()
             self._analytics_trades = self._load_analytics_trades()
+        self._ama_control = AmaControlEngine(
+            settings.ama_control,
+            project_root=self._project_root,
+            run_id=self._run_id or f"UNATTRIBUTED-{self._session_id}",
+            session_id=self._session_id,
+        )
+        self._ama_control.set_external_benchmark(
+            "CURRENT_PAPER_BASELINE", self._paper_baseline_benchmark()
+        )
+        self._ama_control_error: str | None = None
         self._session_start_equity = self._initial_balance
         self._session_peak_equity = self._initial_balance
 
@@ -827,6 +838,15 @@ class PaperTrader:
         received = monotonic()
         self._last_market_monotonic.update(dict.fromkeys(current_markets, received))
         xau_decision = self._xau_engine.update(current_markets, now=received)
+        try:
+            self._ama_control.set_external_benchmark(
+                "CURRENT_PAPER_BASELINE", self._paper_baseline_benchmark()
+            )
+            self._ama_control.update(current_markets, observed_at=received)
+            self._ama_control_error = None
+        except Exception as exc:
+            self._ama_control_error = str(exc)[:200]
+            self._logger.exception("AMA control update failed")
         if (
             self._recovery_position is not None
             or self._state_error is not None
@@ -1200,6 +1220,7 @@ class PaperTrader:
                 "candidates": candidates,
                 "market_scope": scope,
                 "xau": xau,
+                "ama_control": self._ama_snapshot(),
             },
             orders=self._engine.cache.orders_total_count(),
             positions=len(positions),
@@ -1806,6 +1827,7 @@ class PaperTrader:
                 "monitored_symbols": len(self._strategies),
                 "execution_slots": 1,
                 "candidates": self._candidate_snapshots(),
+                "ama_control": self._ama_snapshot(),
             },
             orders=0,
             positions=positions,
@@ -1888,6 +1910,7 @@ class PaperTrader:
                 "recovery_completed_at_utc": self._recovery_completed_at_utc,
             },
             "experiments": self._experiment_diagnostics(),
+            "ama_control": self._ama_snapshot(),
             "symbols": {
                 "quarantined": dict(sorted(self._symbol_errors.items())),
             },
@@ -1896,6 +1919,29 @@ class PaperTrader:
                 "free_disk_percent": round(free_percent, 2),
                 "safe": usage.free >= MIN_FREE_DISK_BYTES,
             },
+        }
+
+    def _ama_snapshot(self) -> dict[str, object]:
+        self._ama_control.set_external_benchmark(
+            "CURRENT_PAPER_BASELINE", self._paper_baseline_benchmark()
+        )
+        snapshot = self._ama_control.snapshot()
+        if self._ama_control_error is not None:
+            snapshot["status"] = "ERROR"
+            snapshot["error"] = self._ama_control_error
+        return snapshot
+
+    def _paper_baseline_benchmark(self) -> dict[str, object]:
+        aggregate = aggregate_trades(
+            self._analytics_trades,
+            starting_equity=self._starting_equity,
+        )
+        normal = aggregate.get("normal", {})
+        return {
+            **(normal if isinstance(normal, dict) else {}),
+            "status": "RUN_LEDGER_NOT_SAME_TIMELINE",
+            "max_drawdown_usdt": aggregate.get("normal_strategy_max_drawdown_usdt"),
+            "sample_status": "NOT_COMPARABLE",
         }
 
     def _load_analytics_trades(self) -> list[dict[str, object]]:

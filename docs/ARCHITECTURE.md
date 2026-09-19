@@ -175,3 +175,23 @@ NautilusTrader provides an event-driven architecture spanning research, determin
 
 Reference:
 https://nautilustrader.io/docs/latest/concepts/
+
+### Independent XAU KAMA Control
+
+`AmaControlEngine` consumes the same REST ticker poll as the running PAPER engine but has no reference
+to Nautilus order submission. It runs continuously in both market scopes, calculates KAMA 10/20/50,
+classifies regime, evaluates a raw KAMA20 cross and a quality-gated variant, and records hypothetical
+shadow positions. `xau.ama_control.execution_enabled` is required to remain false at configuration
+load and again at engine construction.
+
+The quality gate is centralized and returns deterministic allow/reject codes. Reference evaluation
+uses `XAUT_USDT` and `PAXG_USDT` as research inputs, reports dispersion and XAU dislocation, and fails
+the filtered shadow candidate closed when configured reference requirements are not met or prices are
+abnormal. It never replaces `XAU_USDT` for execution.
+
+Research records are hash-chained under `data/runs/<run_id>/ama-control-v2.jsonl`. V2 enforces the
+documented price-plus-KAMA20-slope raw candidate rule; any pre-validation V1 evidence remains separate
+and is not used in V2 metrics. Restart verifies the
+entire chain and reconstructs rolling KAMA state, open shadow positions, closed shadow trades, and
+unresolved recent counterfactual horizons. A research failure is surfaced as an AMA error and cannot
+authorize or submit an order.

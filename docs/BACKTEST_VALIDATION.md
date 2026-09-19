@@ -75,3 +75,21 @@ Minimum qualitative requirements before any future live phase:
 - Prefer robust parameter regions over one best point.
 - Record every experiment configuration.
 - Compare against simple baselines.
+
+## XAU KAMA Control Comparison
+
+The raw and filtered KAMA20 shadows share the same observations, notional, and execution-profile
+assumptions. Reports must show sample count before PnL and must return `INSUFFICIENT_EVIDENCE` until
+each family has at least the configured minimum number of closed shadow trades.
+
+Execution sensitivity uses three labeled profiles:
+
+- `IDEALIZED`: round-trip fee only;
+- `BASELINE`: fee, observed spread, fixed per-side slippage buffer, and funding buffer;
+- `STRESSED`: baseline costs multiplied by the configured stress factor.
+
+Latency, queue position, partial-fill probability, impact, and adverse selection remain unmodeled.
+Therefore, the result is a shadow counterfactual, not executable-fill proof. Filter complexity is
+supported only when it improves net PnL without worsening drawdown after the minimum sample. Even then,
+promotion remains manual and requires chronological replay, holdout/walk-forward evidence, and extended
+PAPER validation.

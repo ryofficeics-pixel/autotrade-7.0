@@ -773,6 +773,7 @@ class DashboardState:
                 "strategy": paper.strategy,
                 "market_scope": self._scope.snapshot(paper.positions),
                 "entry_v3": dict(self._entry_v3),
+                "ama_control": diagnostics.get("ama_control", {}),
                 "accounting": accounting,
                 "risk": diagnostics.get("risk", {}),
                 "profitability": diagnostics.get("profitability", {}),
