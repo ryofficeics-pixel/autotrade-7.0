@@ -1,2 +1,3 @@
 nautilus_trader==1.231.0
+pandas==2.3.3
 websockets==17.1

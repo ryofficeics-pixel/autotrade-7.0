@@ -124,6 +124,12 @@ Phase 1 challengers:
 
 No strategy receives production status merely because it backtests positively.
 
+Offline challengers implement one causal Strategy API and cannot call the PAPER trader. The current
+research set contains raw KAMA, filtered KAMA, normalized XAUT/PAXG fair value, and a combined
+agreement strategy. Entry V3 remains a separate execution-disabled capture and is not reconstructed
+without synchronized L2/trade evidence. Results are evaluated through explicit modeled costs,
+chronological stages, and a sealed holdout; any PAPER activation remains manual and separate.
+
 ## Execution Bias
 
 Prefer maker/post-only execution when it improves net expectancy and fill probability is acceptable.

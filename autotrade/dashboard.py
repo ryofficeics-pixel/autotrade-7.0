@@ -32,6 +32,8 @@ GATE_TICKERS_URL = "https://api.gateio.ws/api/v4/futures/usdt/tickers"
 GATE_CONTRACTS_URL = "https://api.gateio.ws/api/v4/futures/usdt/contracts"
 MAX_RESPONSE_BYTES = 2_000_000
 STATIC_DIR = Path(__file__).resolve().parents[1] / "dashboard"
+DEFAULT_RESEARCH_REPORT = Path(__file__).resolve().parents[1] / "reports" / "research-latest.json"
+MAX_RESEARCH_REPORT_BYTES = 5_000_000
 XAU_SCOPE_SYMBOLS = {"XAU_USDT", "XAUT_USDT", "PAXG_USDT"}
 
 
@@ -252,6 +254,7 @@ class DashboardState:
         config_path: Path | None = None,
         paper_factory: Callable[[], PaperTrader] | None = None,
         scope_controller: MarketScopeController | None = None,
+        research_report_path: Path = DEFAULT_RESEARCH_REPORT,
     ) -> None:
         self._report = report
         self._settings = settings
@@ -259,6 +262,12 @@ class DashboardState:
         self._tradingview = tradingview
         self._config_path = config_path
         self._paper_factory = paper_factory
+        self._research_report_path = research_report_path
+        self._research_report_mtime_ns: int | None = None
+        self._research_report: dict[str, object] = {
+            "status": "UNAVAILABLE",
+            "reason": "No frozen research report has been generated.",
+        }
         resolved_scope = scope_controller or getattr(paper, "scope_controller", None)
         if not isinstance(resolved_scope, MarketScopeController):
             resolved_scope = MarketScopeController(
@@ -325,6 +334,31 @@ class DashboardState:
     def set_entry_v3_status(self, status: dict[str, object]) -> None:
         with self._lock:
             self._entry_v3 = dict(status)
+
+    def _research_snapshot(self) -> dict[str, object]:
+        try:
+            stat = self._research_report_path.stat()
+            if stat.st_size > MAX_RESEARCH_REPORT_BYTES:
+                raise ValueError("research report exceeds the dashboard safety limit")
+            if stat.st_mtime_ns != self._research_report_mtime_ns:
+                value = json.loads(self._research_report_path.read_text(encoding="utf-8"))
+                if not isinstance(value, dict):
+                    raise ValueError("research report is not a JSON object")
+                self._research_report = {"status": "READY", **value}
+                self._research_report_mtime_ns = stat.st_mtime_ns
+        except FileNotFoundError:
+            self._research_report = {
+                "status": "UNAVAILABLE",
+                "reason": "No frozen research report has been generated.",
+            }
+            self._research_report_mtime_ns = None
+        except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
+            self._research_report = {
+                "status": "ERROR",
+                "reason": str(exc)[:200],
+            }
+            self._research_report_mtime_ns = None
+        return dict(self._research_report)
 
     def _fresh(self, now: float) -> tuple[bool, float | None]:
         if self._last_success_monotonic is None:
@@ -774,6 +808,7 @@ class DashboardState:
                 "market_scope": self._scope.snapshot(paper.positions),
                 "entry_v3": dict(self._entry_v3),
                 "ama_control": diagnostics.get("ama_control", {}),
+                "research": self._research_snapshot(),
                 "accounting": accounting,
                 "risk": diagnostics.get("risk", {}),
                 "strategy_evidence": diagnostics.get("strategy_evidence", {}),

@@ -1,8 +1,20 @@
 # Strategy promotion policy
 
-Statuses are BASELINE, SHADOW, CANDIDATE, CHAMPION, and REJECTED. V2 is BASELINE and can execute only
-in PAPER mode when explicitly enabled by configuration. V3 is SHADOW.
+Runtime display statuses remain BASELINE, SHADOW, CANDIDATE, CHAMPION, and REJECTED. The durable
+research lifecycle uses EXPERIMENTAL, OBSERVING, VALIDATED, PAPER_ELIGIBLE, PAPER_ACTIVE,
+QUARANTINED, and RETIRED. V3 remains execution-disabled shadow evidence.
 
 Promotion requires reproducible, cost-aware, chronological out-of-sample evidence across symbols and regimes, with positive net expectancy, profit factor above one, acceptable drawdown, sufficient independent samples, calibration quality, and a cost stress test. Dirty-tree evidence is not eligible for promotion.
 
 No status permits live trading.
+
+Promotion is fail-closed and append-only. A challenger must pass minimum sample, positive gross and
+net expectancy, profit-factor, drawdown, chronological test, sealed final holdout, stressed execution,
+temporal/regime coverage, parameter stability, data integrity, and execution-model validation. A
+positive replay does not activate it. The only allowed path is a manual, attributed transition from
+VALIDATED to PAPER_ELIGIBLE, followed by a second manual transition to PAPER_ACTIVE. There is no
+automatic transition, no restart reset, and no LIVE lifecycle state.
+
+REST Momentum V2 is retired after `STRATEGY_EVIDENCE_FAILED`. Raw KAMA is quarantined pending a new
+premise. Filtered KAMA remains observing; Entry V3, fair value, and combined challengers remain
+experimental until complete evidence exists. See `RESEARCH_ENGINE.md`.

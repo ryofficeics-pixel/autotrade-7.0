@@ -58,6 +58,54 @@ test("paper dashboard is truthful and controls fail closed", async ({ page }) =>
     active_symbols: 2,
     alerts: ["REST Momentum is paused."],
     controls: { pause_allowed: false, resume_allowed: true, flatten_allowed: false },
+    research: {
+      status: "READY",
+      dataset: { dataset_id: "xau-test-dataset", row_count: 7665 },
+      experiment_identity: {
+        dataset_id: "xau-test-dataset", dataset_hash: "a".repeat(64), git_commit: "abcdef0123456789",
+        config_hash: "b".repeat(64), execution_profile: "BASELINE", experiment_ids: ["experiment-001"],
+      },
+      strategy_lab: [{
+        strategy: "XAU_FAIR_VALUE_V1", version: "1", lifecycle_state: "EXPERIMENTAL", sample: 1,
+        gross_expectancy_bps: 2.6, net_expectancy_bps: -14.42, profit_factor: 0,
+        maximum_drawdown_bps: 14.42, test_result: null, final_holdout_result: null,
+        stress_result: { net_expectancy_bps: -22.1 }, parameter_stability: "INSUFFICIENT_EVIDENCE",
+        promotion_eligible: false, reason_blocked: ["EXECUTION_MODEL_NOT_VALIDATED"],
+      }],
+      unsupported_strategies: [{
+        strategy_id: "MICROSTRUCTURE_ENTRY_V3", strategy_version: "3",
+        lifecycle_state: "EXPERIMENTAL", status: "NOT_RECONSTRUCTABLE",
+        reason: "L2 evidence unavailable", promotion_eligible: false,
+      }],
+      candidate_funnels: {
+        KAMA_FILTERED_CAPTURED: {
+          generated: 3058, accepted: 1, rejected: 3057,
+          binding_gates: [{ gate: "REGIME", reject_count: 1722 }],
+        },
+      },
+      no_trade_value: {
+        KAMA_FILTERED_CAPTURED: {
+          rejected: 3050, avoided_losses: 2884, missed_profitable_trades: 165,
+          net_filter_benefit_bps: 130.4, time_in_no_trade_seconds: 88000,
+        },
+      },
+      execution_edge: {
+        XAU_FAIR_VALUE_V1: {
+          gross_move_bps: 2.6, spread_cost_bps: 1.8, fee_cost_bps: 10,
+          slippage_cost_bps: 2, latency_cost_bps: 1, adverse_selection_bps: 1.2,
+          funding_cost_bps: 0.02, impact_bps: 1, net_edge_bps: -14.42,
+        },
+      },
+      lifecycle: {
+        "REST_MOMENTUM_TOURNAMENT_V2:2": {
+          strategy_id: "REST_MOMENTUM_TOURNAMENT_V2", strategy_version: "2",
+          state: "RETIRED", reason: "NEGATIVE_NORMAL_EXPECTANCY",
+        },
+      },
+      paper_eligible_strategies: [],
+      automatic_promotion: false,
+      live_trading: "UNAVAILABLE",
+    },
   };
   await page.route("**/api/**", async (route) => {
     if (route.request().url().endsWith("/api/market-scope") && route.request().method() === "POST") {
@@ -116,6 +164,12 @@ test("paper dashboard is truthful and controls fail closed", async ({ page }) =>
   await expect(page.locator("#ama-comparison-rows tr")).toHaveCount(6);
   await expect(page.locator("#ama-complexity")).toContainText("UNPROVEN");
   await expect(page.locator("#ama-strategy-status")).toContainText("EXECUTION DISABLED");
+  await expect(page.locator("#research-status")).toHaveText("NO STRATEGY ELIGIBLE");
+  await expect(page.locator("#research-dataset")).toHaveText("xau-test-dataset");
+  await expect(page.locator("#research-strategy-rows")).toContainText("XAU_FAIR_VALUE_V1");
+  await expect(page.locator("#research-strategy-rows tr")).toHaveCount(2);
+  await expect(page.locator("#research-funnel-rows")).toContainText("REGIME");
+  await expect(page.locator("#research-lifecycle-rows")).toContainText("RETIRED");
   await page.screenshot({ path: "test-results/dashboard-overview.png", fullPage: true });
 
   await page.getByRole("button", { name: "XAU ONLY" }).click();

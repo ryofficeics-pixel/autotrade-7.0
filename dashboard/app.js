@@ -18,6 +18,13 @@ function metricMoney(value) {
   return Number.isFinite(value) ? `${value >= 0 ? "+" : "-"}$${money.format(Math.abs(value))}` : "N/A";
 }
 function metricPercent(value) { return Number.isFinite(value) ? `${value.toFixed(2)}%` : "N/A"; }
+function metricBps(value) { return Number.isFinite(value) ? `${signed(value, 2)} bps` : "N/A"; }
+function duration(value) {
+  if (!Number.isFinite(value)) return "N/A";
+  const hours = Math.floor(value / 3600);
+  const minutes = Math.floor((value % 3600) / 60);
+  return `${hours}h ${minutes}m`;
+}
 function status(element, label, state) {
   element.textContent = label;
   element.className = `status ${state}`;
@@ -263,6 +270,146 @@ function renderAma(ama = {}) {
   text("ama-strategy-detail", `${ama.filtered_signal || "WAIT"} after quality gate · ${ama.counterfactual_pending || 0} pending counterfactuals · no order path.`);
 }
 
+function emptyRow(columnCount, message) {
+  const row = document.createElement("tr");
+  const item = document.createElement("td");
+  item.colSpan = columnCount;
+  item.className = "empty";
+  item.textContent = message;
+  row.append(item);
+  return row;
+}
+
+function renderResearch(research = {}) {
+  const ready = research.status === "READY" && research.dataset;
+  const badge = $("research-status");
+  if (!ready) {
+    badge.textContent = research.status || "UNAVAILABLE";
+    badge.className = `badge ${research.status === "ERROR" ? "bad" : "neutral"}`;
+    text("research-detail", research.reason || "No frozen research report has loaded.");
+    text("research-dataset", "N/A");
+    text("research-dataset-hash", "N/A");
+    text("research-commit", "N/A");
+    text("research-config", "N/A");
+    text("research-profile", "N/A");
+    text("research-experiments", "N/A");
+    $("research-strategy-rows").replaceChildren(emptyRow(14, "Generate and verify a frozen replay before comparing strategies."));
+    $("research-funnel-rows").replaceChildren(emptyRow(6, "No candidate decision ledger has loaded."));
+    $("research-no-trade-rows").replaceChildren(emptyRow(6, "No resolved candidate outcomes have loaded."));
+    $("research-edge-rows").replaceChildren(emptyRow(10, "No versioned execution profile has loaded."));
+    $("research-lifecycle-rows").replaceChildren(emptyRow(4, "No lifecycle registry has loaded."));
+    return;
+  }
+
+  const eligible = research.paper_eligible_strategies || [];
+  badge.textContent = eligible.length ? `${eligible.length} PAPER ELIGIBLE` : "NO STRATEGY ELIGIBLE";
+  badge.className = `badge ${eligible.length ? "paper" : "warn"}`;
+  text("research-detail", eligible.length ? "Eligibility is evidence-only. Activation still requires operator approval." : "Every evaluated strategy remains blocked from PAPER activation.");
+  const identity = research.experiment_identity || {};
+  const short = (value) => typeof value === "string" && value.length > 16 ? value.slice(0, 16) : value || "N/A";
+  text("research-dataset", identity.dataset_id || research.dataset.dataset_id || "N/A");
+  text("research-dataset-hash", short(identity.dataset_hash));
+  $("research-dataset-hash").title = identity.dataset_hash || "";
+  text("research-commit", short(identity.git_commit));
+  $("research-commit").title = identity.git_commit || "";
+  text("research-config", short(identity.config_hash));
+  $("research-config").title = identity.config_hash || "";
+  text("research-profile", identity.execution_profile || "N/A");
+  const experimentIds = identity.experiment_ids || [];
+  text("research-experiments", experimentIds.length ? experimentIds.map(short).join(", ") : "N/A");
+  $("research-experiments").title = experimentIds.join("\n");
+
+  const unsupported = (research.unsupported_strategies || []).map((row) => ({
+    strategy: row.strategy_id,
+    version: row.strategy_version,
+    lifecycle_state: row.lifecycle_state,
+    sample: "N/A",
+    gross_expectancy_bps: null,
+    net_expectancy_bps: null,
+    profit_factor: null,
+    maximum_drawdown_bps: null,
+    test_result: "N/A",
+    final_holdout_result: "N/A",
+    stress_result: null,
+    parameter_stability: "N/A",
+    promotion_eligible: false,
+    reason_blocked: [row.status, row.reason],
+  }));
+  const strategyRows = [...(research.strategy_lab || []), ...unsupported].map((metrics) => {
+    const row = document.createElement("tr");
+    cell(row, metrics.strategy || "UNKNOWN", "symbol");
+    cell(row, metrics.version || "N/A");
+    cell(row, metrics.lifecycle_state || "EXPERIMENTAL");
+    cell(row, String(metrics.sample ?? "N/A"));
+    cell(row, metricBps(metrics.gross_expectancy_bps));
+    cell(row, metricBps(metrics.net_expectancy_bps), Number(metrics.net_expectancy_bps) > 0 ? "positive" : "negative");
+    cell(row, Number.isFinite(metrics.profit_factor) ? metrics.profit_factor.toFixed(2) : "N/A");
+    cell(row, metricBps(metrics.maximum_drawdown_bps));
+    cell(row, metricBps(metrics.test_result));
+    cell(row, metricBps(metrics.final_holdout_result));
+    cell(row, metricBps(metrics.stress_result?.net_expectancy_bps));
+    cell(row, (metrics.parameter_stability || "N/A").replaceAll("_", " "));
+    cell(row, metrics.promotion_eligible ? "YES" : "NO", metrics.promotion_eligible ? "positive" : "negative");
+    cell(row, (metrics.reason_blocked || []).join(", ").replaceAll("_", " ") || "None");
+    return row;
+  });
+  $("research-strategy-rows").replaceChildren(...strategyRows);
+
+  const funnels = research.candidate_funnels || {};
+  const funnelRows = Object.entries(funnels).map(([name, funnel]) => {
+    const row = document.createElement("tr");
+    const binding = funnel?.binding_gates?.[0] || {};
+    cell(row, name.replaceAll("_", " "), "symbol");
+    cell(row, String(funnel?.generated ?? "N/A"));
+    cell(row, String(funnel?.accepted ?? "N/A"));
+    cell(row, String(funnel?.rejected ?? "N/A"));
+    cell(row, (binding.gate || "N/A").replaceAll("_", " "));
+    cell(row, String(binding.reject_count ?? "N/A"));
+    return row;
+  });
+  $("research-funnel-rows").replaceChildren(...(funnelRows.length ? funnelRows : [emptyRow(6, "No candidate funnel has loaded.")]));
+
+  const noTrade = research.no_trade_value || {};
+  const noTradeRows = Object.entries(noTrade).map(([name, value]) => {
+    const row = document.createElement("tr");
+    const funnel = funnels[name] || {};
+    cell(row, name.replaceAll("_", " "), "symbol");
+    cell(row, String(value?.rejected ?? funnel.rejected ?? "N/A"));
+    cell(row, String(value?.avoided_losses ?? "N/A"));
+    cell(row, String(value?.missed_profitable_trades ?? "N/A"));
+    cell(row, metricBps(value?.net_filter_benefit_bps));
+    cell(row, duration(value?.time_in_no_trade_seconds));
+    return row;
+  });
+  $("research-no-trade-rows").replaceChildren(...(noTradeRows.length ? noTradeRows : [emptyRow(6, "No resolved outcomes have loaded.")]));
+
+  const edgeRows = Object.entries(research.execution_edge || {}).map(([name, edge]) => {
+    const row = document.createElement("tr");
+    cell(row, name, "symbol");
+    cell(row, metricBps(edge.gross_move_bps));
+    cell(row, metricBps(edge.spread_cost_bps));
+    cell(row, metricBps(edge.fee_cost_bps));
+    cell(row, metricBps(edge.slippage_cost_bps));
+    cell(row, metricBps(edge.latency_cost_bps));
+    cell(row, metricBps(edge.adverse_selection_bps));
+    cell(row, metricBps(edge.funding_cost_bps));
+    cell(row, metricBps(edge.impact_bps));
+    cell(row, metricBps(edge.net_edge_bps), Number(edge.net_edge_bps) > 0 ? "positive" : "negative");
+    return row;
+  });
+  $("research-edge-rows").replaceChildren(...(edgeRows.length ? edgeRows : [emptyRow(10, "No execution decomposition has loaded.")]));
+
+  const lifecycleRows = Object.values(research.lifecycle || {}).map((item) => {
+    const row = document.createElement("tr");
+    cell(row, item.strategy_id || "UNKNOWN", "symbol");
+    cell(row, item.strategy_version || "N/A");
+    cell(row, item.state || "UNKNOWN");
+    cell(row, (item.reason || "N/A").replaceAll("_", " "));
+    return row;
+  });
+  $("research-lifecycle-rows").replaceChildren(...(lifecycleRows.length ? lifecycleRows : [emptyRow(4, "No lifecycle registry has loaded.")]));
+}
+
 function render(state) {
   latestState = state;
   const accounting = state.accounting || { state: "INVALID", reason: "Accounting diagnostics unavailable." };
@@ -354,6 +501,7 @@ function render(state) {
   renderTradeHistory(state.trade_history);
   renderProfitability(state.profitability, state.experiments);
   renderAma(state.ama_control || state.strategy?.ama_control || {});
+  renderResearch(state.research || {});
 
   const alerts = state.alerts.map((message) => {
     const alert = document.createElement("p");
@@ -390,6 +538,7 @@ function disconnected() {
   renderTradeHistory([]);
   renderProfitability({}, {});
   renderAma({ status: "UNAVAILABLE", evidence_integrity: "UNKNOWN" });
+  renderResearch({ status: "ERROR", reason: "Backend unavailable; research evidence cannot be verified." });
 }
 
 async function switchScope(target) {

@@ -156,6 +156,20 @@ Not allowed:
 - bypass Risk Gate;
 - submit live orders.
 
+### Offline Research and Promotion Boundary
+
+The offline research process consumes a verified prefix of the runtime AMA evidence and writes only
+under `research/` and `reports/`. It has no reference to `PaperTrader`, the control endpoints, market
+scope, or Nautilus order submission. Dataset and experiment identity bind source prefix, content
+hashes, code commit, research configuration, strategy/parameter hashes, execution-profile version,
+and deterministic seed.
+
+Candidate generation, counterfactual resolution, cost decomposition, chronological validation,
+holdout sealing, registry, and lifecycle state are shared across reconstructable challengers.
+Runtime REST Momentum and Entry V3 are reported as non-reconstructable when required inputs are not
+on the frozen timeline. The dashboard loads a bounded read-only summary; closing it cannot affect
+research or trading. See `RESEARCH_ENGINE.md`.
+
 ## Technology Direction
 
 Prefer:

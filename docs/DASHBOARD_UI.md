@@ -38,6 +38,13 @@ References:
 
 ## Visual Language
 
+Design read: this is a dense operations console whose first job is to expose unsafe state and
+evidence limits, not a marketing surface. ENERGY 2, RHYTHM 2, MOTION 1. The restrained cyan square,
+hard rectangular controls, compact type, and status text are the identity motif. Subtle dark
+gradients separate control/evidence hierarchy without implying motion or depth; cyan is reserved for
+PAPER-safe/valid state, amber for review, and red for failure. The dark theme matches the existing
+long-running monitoring workflow; no alternate theme is specified for Phase 1.
+
 - Dark-first professional interface
 - Dense but readable
 - High information hierarchy
@@ -149,6 +156,13 @@ from the backend Gate price every five seconds.
 - forward-return horizon analysis;
 - equity curve;
 - cost decomposition.
+
+The implemented Research section is a bounded read-only projection of
+`reports/research-latest.json`. It shows exact dataset/experiment identity, the Strategy Lab comparison,
+candidate funnel and binding gates, avoided-loss versus missed-profit diagnostics, decomposed
+execution edge, and lifecycle state. Unsupported comparisons say `NOT_RECONSTRUCTABLE`; missing or
+corrupt reports show `UNAVAILABLE` or `ERROR`. Signal strength is never labeled as calibrated
+confidence. There is no browser promotion, activation, parameter-tuning, or LIVE control.
 
 ### 6. Health
 

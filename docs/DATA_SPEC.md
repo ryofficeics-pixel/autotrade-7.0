@@ -100,6 +100,13 @@ During Phase 1 collect continuously while the laptop is running.
 
 Do not prematurely aggregate away raw data required for later replay.
 
+Frozen research evidence is stored under `research/datasets/<dataset_id>/`. A freeze verifies the
+source chain, snapshots a complete source byte prefix, normalizes the observations, and records the
+source-prefix SHA-256, normalized event hash, row count, sample window, timestamp policy, Git commit,
+and capture-config hash. The manifest and events are write-once/read-only; mutation causes verification
+failure. Canonical datasets, experiment ledgers, registries, and lifecycle history have no automatic
+deletion. `reports/research-latest.*` is regenerable and is not the evidence authority.
+
 ## AMA Control Evidence
 
 The independent XAU control writes schema-v2, append-only, hash-chained JSONL to

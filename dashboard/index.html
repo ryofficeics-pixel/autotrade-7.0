@@ -27,6 +27,7 @@
     <a href="#ama-control">AMA Control</a>
     <a href="#trades">Trades</a>
     <a href="#strategies">Strategies</a>
+    <a href="#research">Research</a>
     <a href="#health">Health</a>
   </aside>
 
@@ -82,7 +83,7 @@
       </header>
       <div class="xau-grid">
         <div><span>Price</span><strong id="xau-price">N/A</strong></div>
-        <div><span>Confidence</span><strong id="xau-confidence">0%</strong></div>
+        <div><span>Signal strength</span><strong id="xau-confidence">0%</strong></div>
         <div><span>Regime</span><strong id="xau-regime">UNTRADABLE</strong></div>
         <div><span>Volatility</span><strong id="xau-volatility">UNKNOWN</strong></div>
         <div><span>XAUT</span><strong id="xaut-health">UNAVAILABLE</strong></div>
@@ -185,7 +186,7 @@
         <header><div><p class="eyebrow">PUBLIC MARKET DATA</p><h2>Gate Futures Screen</h2></div><span class="muted">5s REST snapshot</span></header>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Market</th><th>Last</th><th>24h</th><th>Spread</th><th>Volume</th><th>Funding</th><th>Screen</th><th>Confidence</th><th>Signal</th><th>State</th></tr></thead>
+            <thead><tr><th>Market</th><th>Last</th><th>24h</th><th>Spread</th><th>Volume</th><th>Funding</th><th>Screen</th><th>Signal strength</th><th>Signal</th><th>State</th></tr></thead>
             <tbody id="market-rows"><tr><td colspan="10" class="empty">Waiting for Gate market data…</td></tr></tbody>
           </table>
         </div>
@@ -218,7 +219,7 @@
           <div class="tv-details">
             <span>Chart</span><strong id="tv-symbol">N/A</strong>
             <span>Timeframe</span><strong id="tv-timeframe">N/A</strong>
-            <span>Bias / confidence</span><strong id="tv-bias">UNAVAILABLE / N/A</strong>
+            <span>Bias / signal strength</span><strong id="tv-bias">UNAVAILABLE / N/A</strong>
             <span>Secondary price / divergence</span><strong id="tv-price">N/A / N/A</strong>
             <span>Indicator studies</span><strong id="tv-indicators">N/A</strong>
             <span>Regime / Pine</span><strong id="tv-regime">UNAVAILABLE / UNAVAILABLE</strong>
@@ -248,6 +249,75 @@
         <article><strong>Microstructure Entry V3</strong><span id="entry-v3-status">CHECKING</span><p id="entry-v3-detail">Waiting for the causal Gate WebSocket shadow feed.</p></article>
         <article><strong>XAU KAMA20 Control V2</strong><span id="ama-strategy-status">CHECKING</span><p id="ama-strategy-detail">Independent shadow control. It cannot submit orders.</p></article>
       </div>
+    </section>
+
+    <section id="research" class="panel research-panel" aria-labelledby="research-title">
+      <header>
+        <div><p class="eyebrow">OFFLINE EVIDENCE · READ ONLY</p><h2 id="research-title">Research and Promotion</h2></div>
+        <span id="research-status" class="badge neutral">CHECKING</span>
+      </header>
+      <p id="research-detail" class="research-note" aria-live="polite">Loading the latest frozen research report.</p>
+
+      <div class="research-identity" aria-label="Experiment identity">
+        <dl><dt>Dataset</dt><dd id="research-dataset">N/A</dd></dl>
+        <dl><dt>Dataset hash</dt><dd id="research-dataset-hash">N/A</dd></dl>
+        <dl><dt>Git commit</dt><dd id="research-commit">N/A</dd></dl>
+        <dl><dt>Config hash</dt><dd id="research-config">N/A</dd></dl>
+        <dl><dt>Execution profile</dt><dd id="research-profile">N/A</dd></dl>
+        <dl><dt>Experiment IDs</dt><dd id="research-experiments">N/A</dd></dl>
+      </div>
+
+      <div class="research-block">
+        <h3>Strategy Lab</h3>
+        <div class="table-wrap">
+          <table class="research-table">
+            <thead><tr><th>Strategy</th><th>Version</th><th>Lifecycle</th><th>Sample</th><th>Gross exp.</th><th>Net exp.</th><th>PF</th><th>Max DD</th><th>Test</th><th>Holdout</th><th>Stress</th><th>Parameter stability</th><th>Eligible</th><th>Blocked by</th></tr></thead>
+            <tbody id="research-strategy-rows"><tr><td colspan="14" class="empty">No frozen strategy comparison has loaded.</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="research-split">
+        <div class="research-block">
+          <h3>Candidate Funnel</h3>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Evidence</th><th>Generated</th><th>Accepted</th><th>Rejected</th><th>Binding gate</th><th>Rejected</th></tr></thead>
+              <tbody id="research-funnel-rows"><tr><td colspan="6" class="empty">No candidate funnel has loaded.</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="research-block">
+          <h3>No-Trade Value</h3>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Evidence</th><th>Distinct rejected</th><th>Losses avoided</th><th>Profit missed</th><th>Net filter benefit</th><th>No-trade time</th></tr></thead>
+              <tbody id="research-no-trade-rows"><tr><td colspan="6" class="empty">No candidate outcomes have loaded.</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="research-block">
+        <h3>Execution Edge</h3>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Strategy</th><th>Gross</th><th>Spread</th><th>Fee</th><th>Slippage</th><th>Latency</th><th>Adverse</th><th>Funding</th><th>Impact</th><th>Net realizable</th></tr></thead>
+            <tbody id="research-edge-rows"><tr><td colspan="10" class="empty">No execution decomposition has loaded.</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="research-block">
+        <h3>Strategy Lifecycle</h3>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Strategy</th><th>Version</th><th>State</th><th>Reason</th></tr></thead>
+            <tbody id="research-lifecycle-rows"><tr><td colspan="4" class="empty">No lifecycle registry has loaded.</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+      <p class="research-note">Research cannot place orders or promote itself. PAPER activation requires a separate operator approval. LIVE remains unavailable.</p>
     </section>
   </main>
 

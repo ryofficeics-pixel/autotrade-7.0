@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import tempfile
 import threading
 import unittest
 from dataclasses import replace
@@ -406,6 +407,37 @@ class DashboardTests(unittest.TestCase):
 
         headers.replace_header("Origin", "https://evil.example")
         self.assertFalse(request_is_local(headers, 8765, require_origin=True))
+
+    def test_research_report_is_read_only_dashboard_state(self) -> None:
+        report = RuntimeReport("PAPER", "test", "TESTER-001", "GATE", "300", "1", True, True)
+        with tempfile.TemporaryDirectory() as directory:
+            research_path = Path(directory) / "research-latest.json"
+            research_path.write_text(
+                json.dumps(
+                    {
+                        "dataset": {"dataset_id": "dataset-1"},
+                        "paper_eligible_strategies": [],
+                        "automatic_promotion": False,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            state = DashboardState(
+                report,
+                self.settings(),
+                self.paper(),  # type: ignore[arg-type]
+                self.tradingview(),  # type: ignore[arg-type]
+                research_report_path=research_path,
+            )
+            snapshot = state.snapshot()
+            research = snapshot["research"]
+            self.assertEqual(research["status"], "READY")  # type: ignore[index]
+            self.assertEqual(research["dataset"]["dataset_id"], "dataset-1")  # type: ignore[index]
+            self.assertFalse(research["automatic_promotion"])  # type: ignore[index]
+
+            research_path.write_text("not-json", encoding="utf-8")
+            failed = state.snapshot()["research"]
+            self.assertEqual(failed["status"], "ERROR")  # type: ignore[index]
 
     def test_analysis_repairs_startup_and_preserves_safety_halts(self) -> None:
         report = RuntimeReport("PAPER", "test", "TESTER-001", "GATE", "300", "1", True, True)

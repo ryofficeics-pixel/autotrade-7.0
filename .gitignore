@@ -14,4 +14,10 @@ logs/
 playwright-report/
 test-results/
 reports/
+research/datasets/
+research/experiments/
+research/registry.jsonl
+research/lifecycle.jsonl
+research/retired/
+research/*.lock
 vendor/tradingview-mcp/

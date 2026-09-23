@@ -51,6 +51,7 @@ Recommended reading order:
 11. `SECURITY.md`
 12. `CODEX_WORKFLOW.md`
 13. `AUTOTRADE_7_IMPROVEMENT_AUDIT.md`
+14. `RESEARCH_ENGINE.md`
 
 ## Safety Gate
 
@@ -156,6 +157,22 @@ engine has no order-submission reference, and the dashboard has no AMA execution
 the documented price-plus-KAMA20-slope raw signal and keeps its evidence separate from the superseded
 pre-validation V1 stream. Its quote-step
 ATR is not candle ATR, and its modeled profiles do not prove achievable fills.
+
+## Offline Research and Promotion Evidence
+
+The research CLI freezes the current verified AMA evidence prefix, replays the raw KAMA, filtered
+KAMA, fair-value, and combined challengers through one causal interface, and emits candidate-level
+ledgers, counterfactuals, explicit cost decomposition, chronological validation, and a sealed final
+holdout. It also diagnoses the captured Entry V3 funnel without pretending its separate L2 timeline
+can be reconstructed from REST observations.
+
+```bat
+.venv\Scripts\python.exe -m autotrade.research_cli --project-root . full
+```
+
+The latest read-only summary appears in the dashboard Research section. Research cannot arm a
+strategy or clear `STRATEGY_EVIDENCE_FAILED`; all current execution profiles remain modeled and
+manual PAPER activation is a separate lifecycle operation. See `docs/RESEARCH_ENGINE.md`.
 
 ## Optional TradingView Research Sidecar
 

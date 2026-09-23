@@ -1,0 +1,63 @@
+[research]
+schema_version = 1
+horizons_seconds = [10, 30, 60, 180, 300, 900]
+purge_seconds = 900
+embargo_seconds = 900
+selection_fraction = "0.50"
+validation_fraction = "0.20"
+test_fraction = "0.15"
+final_holdout_fraction = "0.15"
+minimum_promotion_trades = 100
+minimum_profit_factor = "1.10"
+maximum_drawdown_pct = "10"
+minimum_temporal_windows = 3
+minimum_regimes = 2
+
+# These are conservative research assumptions, not measurements of Gate execution.
+[execution_profiles.IDEALIZED]
+version = "1"
+fee_bps = "10"
+spread_multiplier = "0"
+slippage_bps = "0"
+latency_bps = "0"
+adverse_selection_bps = "0"
+funding_bps = "0"
+impact_bps = "0"
+fill_probability = "1"
+partial_fill_ratio = "1"
+
+[execution_profiles.BASELINE]
+version = "1"
+fee_bps = "10"
+spread_multiplier = "1"
+slippage_bps = "4"
+latency_bps = "0"
+adverse_selection_bps = "0"
+funding_bps = "3"
+impact_bps = "0"
+fill_probability = "1"
+partial_fill_ratio = "1"
+
+[execution_profiles.STRESSED]
+version = "1"
+fee_bps = "15"
+spread_multiplier = "1.5"
+slippage_bps = "6"
+latency_bps = "3"
+adverse_selection_bps = "2"
+funding_bps = "4.5"
+impact_bps = "1"
+fill_probability = "0.80"
+partial_fill_ratio = "0.80"
+
+[execution_profiles.REALISTIC]
+version = "SIMULATED_V1"
+fee_bps = "10"
+spread_multiplier = "1"
+slippage_bps = "4"
+latency_bps = "2"
+adverse_selection_bps = "1.5"
+funding_bps = "3"
+impact_bps = "0.5"
+fill_probability = "0.90"
+partial_fill_ratio = "0.90"

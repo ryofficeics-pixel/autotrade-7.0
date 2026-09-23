@@ -130,6 +130,11 @@ and time-exit logic remains responsible for that position. `STRATEGY_EVIDENCE_FA
 restart and cannot be cleared by the ordinary Resume control. A new strategy or run requires explicit
 review and must satisfy the promotion policy; lowering the gate is not evidence of improvement.
 
+The offline research engine cannot clear this halt. A replay, lifecycle record, dashboard result, or
+positive counterfactual has no runtime authority. Current REST-derived datasets also lack validated
+executable-fill evidence, so promotion is blocked even if a modeled metric becomes positive. Risk,
+notional, leverage, loss, and drawdown limits are unchanged by research activity.
+
 ## Nautilus Risk Engine
 
 Use NautilusTrader's RiskEngine checks rather than bypassing them. Add application-level rules around it where necessary.

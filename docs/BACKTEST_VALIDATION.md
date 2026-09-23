@@ -76,6 +76,17 @@ Minimum qualitative requirements before any future live phase:
 - Record every experiment configuration.
 - Compare against simple baselines.
 
+The implemented research split is strictly chronological: 50% selection, 20% validation, 15% test,
+and 15% sealed final holdout, with 900-second purge and embargo windows by default. Random splits are
+not supported. The final holdout seal binds dataset, strategy hash, and parameter hash before it is
+read. Parameter-neighborhood searches are withheld until a strategy has positive gross and net edge;
+this prevents tuning a family that has not demonstrated a viable premise.
+
+Every experiment identity includes dataset and source-prefix hashes, Git commit, research-config
+hash, strategy and parameter hashes, execution-profile version, and deterministic seed. Candidate
+and counterfactual ledgers are hash-chained. A successful software test proves reproducibility and
+invariants, not profitability.
+
 ## XAU KAMA Control Comparison
 
 The raw and filtered KAMA20 shadows share the same observations, notional, and execution-profile
@@ -88,8 +99,9 @@ Execution sensitivity uses three labeled profiles:
 - `BASELINE`: fee, observed spread, fixed per-side slippage buffer, and funding buffer;
 - `STRESSED`: baseline costs multiplied by the configured stress factor.
 
-Latency, queue position, partial-fill probability, impact, and adverse selection remain unmodeled.
-Therefore, the result is a shadow counterfactual, not executable-fill proof. Filter complexity is
+The new sensitivity profiles can model latency, partial-fill probability, impact, and adverse
+selection, but those values are conservative assumptions rather than calibrated measurements; queue
+position remains unavailable. Therefore, the result is a shadow counterfactual, not executable-fill proof. Filter complexity is
 supported only when it improves net PnL without worsening drawdown after the minimum sample. Even then,
 promotion remains manual and requires chronological replay, holdout/walk-forward evidence, and extended
 PAPER validation.
