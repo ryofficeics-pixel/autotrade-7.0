@@ -83,6 +83,10 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(settings.strategy_regime_window, 36)
         self.assertEqual(str(settings.strategy_minimum_net_edge_bps), "12")
         self.assertEqual(str(settings.strategy_minimum_confidence), "0.60")
+        self.assertTrue(settings.strategy_evidence_halt_enabled)
+        self.assertEqual(settings.strategy_evidence_minimum_trades, 100)
+        self.assertEqual(settings.strategy_evidence_minimum_trading_days, 10)
+        self.assertEqual(str(settings.strategy_evidence_profit_factor_floor), "0.80")
         self.assertFalse(settings.tradingview_enabled)
         self.assertEqual(settings.tradingview_confirmation_mode, "borderline")
         self.assertEqual(str(settings.tradingview_weight), "0.20")
@@ -119,6 +123,24 @@ class SettingsTests(unittest.TestCase):
                     'minimum_confidence = "0.60"', 'minimum_confidence = "0.49"'
                 )
             )
+
+    def test_evidence_halt_requires_meaningful_sample(self) -> None:
+        config = BASE_CONFIG + """
+
+[paper_strategy.evidence_halt]
+minimum_trades = 99
+"""
+        with self.assertRaisesRegex(ConfigError, "minimum_trades must be at least 100"):
+            self.load(config)
+
+    def test_evidence_halt_profit_factor_floor_cannot_exceed_one(self) -> None:
+        config = BASE_CONFIG + """
+
+[paper_strategy.evidence_halt]
+profit_factor_floor = "1.01"
+"""
+        with self.assertRaisesRegex(ConfigError, "profit_factor_floor"):
+            self.load(config)
 
     def test_non_paper_mode_is_rejected(self) -> None:
         with (

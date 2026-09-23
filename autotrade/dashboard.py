@@ -776,6 +776,7 @@ class DashboardState:
                 "ama_control": diagnostics.get("ama_control", {}),
                 "accounting": accounting,
                 "risk": diagnostics.get("risk", {}),
+                "strategy_evidence": diagnostics.get("strategy_evidence", {}),
                 "profitability": diagnostics.get("profitability", {}),
                 "recovery_timing": diagnostics.get("recovery_timing", {}),
                 "experiments": diagnostics.get("experiments", {}),

@@ -57,6 +57,20 @@ alpha parameters.
 
 No fixed symbol list is sacred.
 
+## Strategy Evidence Retirement Gate
+
+The active PAPER strategy is retired from new entries after a meaningful losing sample, rather than
+being allowed to consume the remaining paper balance indefinitely. The default gate requires at least
+100 normal closes over at least 10 UTC trading days, splits those closes into chronological halves,
+and fails only when both halves have negative net PnL and profit factor below 0.80. It ignores manual
+and outage-held recovery closes.
+
+Passing this gate means only that automatic retirement was not triggered. It is not evidence of alpha,
+promotion eligibility, or live readiness. Failure is persisted as `STRATEGY_EVIDENCE_FAILED`, blocks
+new entries before candidate selection, and does not force-close an existing position. Replacing the
+failed strategy requires cost-aware chronological replay, holdout or walk-forward evidence, a fresh
+PAPER run, and manual approval.
+
 ## Market Profiles
 
 `WIDE_CRYPTO` is the unchanged cross-sectional scanner and tournament profile. `XAU_ONLY` is a

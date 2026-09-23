@@ -116,6 +116,12 @@ slippage_bps = "2"
 daily_loss_usdt = "6"
 max_drawdown_pct = "3"
 
+[paper_strategy.evidence_halt]
+enabled = true
+minimum_trades = 100
+minimum_trading_days = 10
+profit_factor_floor = "0.80"
+
 # Profit-seeking changes remain independent and OFF in the unchanged baseline.
 [paper_strategy.experiments]
 risk_normalized_sizing = false

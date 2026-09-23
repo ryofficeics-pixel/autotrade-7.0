@@ -1114,6 +1114,50 @@ class PaperTraderTests(unittest.TestCase):
             finally:
                 trader.close()
 
+    def test_failed_strategy_evidence_halts_entries_without_forced_flatten(self) -> None:
+        report = RuntimeReport("PAPER", "test", "TESTER-001", "GATE", "300", "1", True, True)
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, SAFE_ENV):
+            settings = replace(
+                load_settings(),
+                log_directory=Path(directory),
+                strategy_window=3,
+                strategy_persistence_ticks=2,
+                strategy_regime_window=6,
+                strategy_entry_threshold_bps=Decimal("10"),
+                strategy_minimum_net_edge_bps=Decimal("1"),
+                strategy_minimum_confidence=Decimal("0.10"),
+                strategy_slippage_bps=Decimal("0"),
+            )
+            trader = PaperTrader(report, settings, logging.getLogger("test.paper.evidence-halt"))
+            try:
+                for price in (100.00, 100.05, 100.10, 100.15, 100.20, 100.35, 100.36):
+                    trader.process(market(price), entry_enabled=True)
+                self.assertEqual(trader.snapshot().positions, 1)
+
+                start = datetime(2026, 1, 1, tzinfo=UTC)
+                trader._analytics_trades = [
+                    {
+                        "classification": "NORMAL",
+                        "closed_at": (start + timedelta(days=index // 10)).isoformat(),
+                        "closed_at_wib": (start + timedelta(days=index // 10, hours=7)).isoformat(),
+                        "net_pnl_usdt": 0.1 if index % 5 == 0 else -0.2,
+                    }
+                    for index in range(100)
+                ]
+                trader.process(market(100.36), entry_enabled=True)
+                snapshot = trader.snapshot()
+                evidence = cast(dict[str, object], snapshot.diagnostics["strategy_evidence"])
+                risk = cast(dict[str, object], snapshot.diagnostics["risk"])
+                self.assertEqual(evidence["status"], "FAILED")
+                self.assertEqual(risk["state"], "STRATEGY_EVIDENCE_FAILED")
+                self.assertTrue(snapshot.risk_halted)
+                self.assertFalse(snapshot.strategy["armed"])
+                self.assertEqual(snapshot.positions, 1)
+                self.assertFalse(trader.authorize_resume())
+                self.assertIn("failed the configured evidence gate", snapshot.alerts[0])
+            finally:
+                trader.close()
+
     def test_legacy_recovery_cannot_flatten_without_valid_accounting(self) -> None:
         report = RuntimeReport("PAPER", "test", "TESTER-001", "GATE", "300", "1", True, True)
         with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, SAFE_ENV):

@@ -86,6 +86,7 @@ Halt new entries when:
 - persistence fails critically;
 - daily loss threshold reached;
 - drawdown threshold reached;
+- the active PAPER strategy fails the configured evidence gate in both chronological halves;
 - abnormal slippage/fill behavior detected;
 - strategy produces invalid numeric state;
 - system clock/data timing is unsafe.
@@ -121,6 +122,13 @@ A recovery flatten is allowed only against a quote received within the configure
 limit. A later successful poll must not erase a previously recorded critical execution fault.
 Risk-triggered position closures use the explicit `RISK_FLATTEN` audit reason and remain halted after
 the close; they are not reported as manual user actions.
+
+The strategy-evidence gate is evaluated only after at least 100 normal closes across at least 10 UTC
+trading days. It halts new entries when both chronological halves have negative net PnL and profit
+factor below 0.80. This gate does not force-close an existing position; the normal stop, take-profit,
+and time-exit logic remains responsible for that position. `STRATEGY_EVIDENCE_FAILED` is sticky across
+restart and cannot be cleared by the ordinary Resume control. A new strategy or run requires explicit
+review and must satisfy the promotion policy; lowering the gate is not evidence of improvement.
 
 ## Nautilus Risk Engine
 

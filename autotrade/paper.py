@@ -884,6 +884,7 @@ class PaperTrader:
             self._risk_halted = True
             self._risk_halt_reason = "STORAGE_LOW"
 
+        self._apply_strategy_evidence_halt()
         self._entry_enabled = (
             entry_enabled
             and self._settings.strategy_enabled
@@ -1177,7 +1178,13 @@ class PaperTrader:
         alerts = []
         if self._risk_halted:
             reason = self._risk_halt_reason or "UNKNOWN"
-            alerts.append(f"Paper risk limit reached ({reason}); new entries are halted.")
+            if reason == "STRATEGY_EVIDENCE_FAILED":
+                alerts.append(
+                    "The active PAPER strategy failed the configured evidence gate; "
+                    "new entries remain halted."
+                )
+            else:
+                alerts.append(f"Paper risk limit reached ({reason}); new entries are halted.")
         elif not armed:
             alerts.append("REST Momentum tournament is paused.")
         elif any(
@@ -1768,16 +1775,92 @@ class PaperTrader:
         )
         if pnl <= -self._settings.strategy_daily_loss_usdt:
             self._risk_halted = True
-            self._risk_halt_reason = self._risk_halt_reason or "DAILY_LOSS"
+            if self._risk_halt_reason in {None, "STRATEGY_EVIDENCE_FAILED"}:
+                self._risk_halt_reason = "DAILY_LOSS"
         if drawdown >= self._settings.strategy_max_drawdown_pct:
             self._risk_halted = True
-            self._risk_halt_reason = self._risk_halt_reason or "MAX_DRAWDOWN"
+            if self._risk_halt_reason in {None, "STRATEGY_EVIDENCE_FAILED"}:
+                self._risk_halt_reason = "MAX_DRAWDOWN"
+        self._apply_strategy_evidence_halt()
         if self._risk_halted:
             self._entry_enabled = False
             for strategy in self._strategies.values():
                 strategy.entry_enabled = False
-                if strategy.has_position:
+                if (
+                    strategy.has_position
+                    and self._risk_halt_reason != "STRATEGY_EVIDENCE_FAILED"
+                ):
                     strategy.request_flatten("RISK_FLATTEN")
+
+    def _apply_strategy_evidence_halt(self) -> None:
+        if self._strategy_evidence_status()["status"] != "FAILED":
+            return
+        self._risk_halted = True
+        self._risk_halt_reason = self._risk_halt_reason or "STRATEGY_EVIDENCE_FAILED"
+
+    def _strategy_evidence_status(self) -> dict[str, object]:
+        normal = [
+            trade
+            for trade in self._analytics_trades
+            if trade.get("classification") == "NORMAL"
+        ]
+        trading_days = {
+            str(trade.get("closed_at", ""))[:10]
+            for trade in normal
+            if len(str(trade.get("closed_at", ""))) >= 10
+        }
+        result: dict[str, object] = {
+            "status": (
+                "DISABLED"
+                if not self._settings.strategy_evidence_halt_enabled
+                else "COLLECTING"
+            ),
+            "normal_trades": len(normal),
+            "trading_days": len(trading_days),
+            "minimum_trades": self._settings.strategy_evidence_minimum_trades,
+            "minimum_trading_days": self._settings.strategy_evidence_minimum_trading_days,
+            "profit_factor_floor": float(
+                self._settings.strategy_evidence_profit_factor_floor
+            ),
+            "method": "BOTH_CHRONOLOGICAL_HALVES",
+        }
+        if not self._settings.strategy_evidence_halt_enabled:
+            return result
+        if (
+            len(normal) < self._settings.strategy_evidence_minimum_trades
+            or len(trading_days) < self._settings.strategy_evidence_minimum_trading_days
+        ):
+            return result
+
+        def window_metrics(trades: list[dict[str, object]]) -> dict[str, object]:
+            outcomes = [Decimal(str(trade.get("net_pnl_usdt", 0))) for trade in trades]
+            gross_profit = sum((max(outcome, Decimal(0)) for outcome in outcomes), Decimal(0))
+            gross_loss = -sum((min(outcome, Decimal(0)) for outcome in outcomes), Decimal(0))
+            profit_factor = gross_profit / gross_loss if gross_loss else None
+            return {
+                "trades": len(trades),
+                "net_pnl_usdt": float(sum(outcomes, Decimal(0))),
+                "profit_factor": float(profit_factor) if profit_factor is not None else None,
+            }
+
+        midpoint = len(normal) // 2
+        first = window_metrics(normal[:midpoint])
+        second = window_metrics(normal[midpoint:])
+        floor = self._settings.strategy_evidence_profit_factor_floor
+
+        def failed_window(window: dict[str, object]) -> bool:
+            profit_factor = window["profit_factor"]
+            return (
+                Decimal(str(window["net_pnl_usdt"])) < 0
+                and profit_factor is not None
+                and Decimal(str(profit_factor)) < floor
+            )
+
+        failed = all(failed_window(window) for window in (first, second))
+        result["status"] = "FAILED" if failed else "PASS"
+        result["first_half"] = first
+        result["second_half"] = second
+        return result
 
     def _roll_risk_day(self, equity: Decimal, trades: int) -> None:
         today = datetime.now(UTC).date().isoformat()
@@ -1804,7 +1887,13 @@ class PaperTrader:
         alerts = [alert]
         if self._risk_halted:
             reason = self._risk_halt_reason or "UNKNOWN"
-            alerts.insert(0, f"Paper risk limit reached ({reason}); new entries are halted.")
+            alert = (
+                "The active PAPER strategy failed the configured evidence gate; "
+                "new entries remain halted."
+                if reason == "STRATEGY_EVIDENCE_FAILED"
+                else f"Paper risk limit reached ({reason}); new entries are halted."
+            )
+            alerts.insert(0, alert)
         return PaperSnapshot(
             portfolio=self._portfolio(
                 self._initial_balance,
@@ -1883,6 +1972,7 @@ class PaperTrader:
                 ),
                 "xau_leverage": float(self._settings.xau.maximum_leverage),
             },
+            "strategy_evidence": self._strategy_evidence_status(),
             "execution_model": {
                 "state": "PAPER_SIM",
                 "version": EXECUTION_MODEL_VERSION,

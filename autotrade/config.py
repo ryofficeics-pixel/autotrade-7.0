@@ -112,6 +112,10 @@ class Settings:
     strategy_slippage_bps: Decimal
     strategy_daily_loss_usdt: Decimal
     strategy_max_drawdown_pct: Decimal
+    strategy_evidence_halt_enabled: bool
+    strategy_evidence_minimum_trades: int
+    strategy_evidence_minimum_trading_days: int
+    strategy_evidence_profit_factor_floor: Decimal
     market_scope: MarketScope
     mode_switch_policy: SwitchPolicy
     xau: XauSettings
@@ -190,6 +194,7 @@ def load_settings(path: Path | str = DEFAULT_CONFIG_PATH) -> Settings:
     logging = _table(document, "logging")
     market_data = _table(document, "market_data")
     strategy = _table(document, "paper_strategy")
+    evidence_halt = _optional_table(strategy, "evidence_halt")
     entry_v3 = _optional_table(strategy, "entry_v3")
     impulse = _optional_table(entry_v3, "impulse")
     pullback = _optional_table(entry_v3, "pullback")
@@ -281,6 +286,22 @@ def load_settings(path: Path | str = DEFAULT_CONFIG_PATH) -> Settings:
     )
     strategy_max_drawdown_pct = _decimal(
         strategy.get("max_drawdown_pct", "3"), "paper_strategy.max_drawdown_pct"
+    )
+    strategy_evidence_halt_enabled = _boolean(
+        evidence_halt.get("enabled", True),
+        "paper_strategy.evidence_halt.enabled",
+    )
+    strategy_evidence_minimum_trades = _integer(
+        evidence_halt.get("minimum_trades", 100),
+        "paper_strategy.evidence_halt.minimum_trades",
+    )
+    strategy_evidence_minimum_trading_days = _integer(
+        evidence_halt.get("minimum_trading_days", 10),
+        "paper_strategy.evidence_halt.minimum_trading_days",
+    )
+    strategy_evidence_profit_factor_floor = _decimal(
+        evidence_halt.get("profit_factor_floor", "0.80"),
+        "paper_strategy.evidence_halt.profit_factor_floor",
     )
     try:
         market_scope = MarketScope(str(market.get("scope", "WIDE_CRYPTO")).strip().upper())
@@ -782,6 +803,17 @@ def load_settings(path: Path | str = DEFAULT_CONFIG_PATH) -> Settings:
         )
     if strategy_max_drawdown_pct <= 0 or strategy_max_drawdown_pct > 5:
         raise ConfigError("paper_strategy.max_drawdown_pct must be positive and at most 5%")
+    if strategy_evidence_minimum_trades < 100:
+        raise ConfigError("paper_strategy.evidence_halt.minimum_trades must be at least 100")
+    if strategy_evidence_minimum_trading_days < 10:
+        raise ConfigError(
+            "paper_strategy.evidence_halt.minimum_trading_days must be at least 10"
+        )
+    if not Decimal(0) < strategy_evidence_profit_factor_floor <= 1:
+        raise ConfigError(
+            "paper_strategy.evidence_halt.profit_factor_floor must be greater than 0 "
+            "and no more than 1"
+        )
     if xau_settings.execution_symbol != "XAU_USDT":
         raise ConfigError("xau.execution_symbol must be XAU_USDT in Phase 1")
     if set(xau_settings.confirmation_symbols) - {"XAUT_USDT", "PAXG_USDT"}:
@@ -1043,6 +1075,10 @@ def load_settings(path: Path | str = DEFAULT_CONFIG_PATH) -> Settings:
         strategy_slippage_bps=strategy_slippage_bps,
         strategy_daily_loss_usdt=strategy_daily_loss_usdt,
         strategy_max_drawdown_pct=strategy_max_drawdown_pct,
+        strategy_evidence_halt_enabled=strategy_evidence_halt_enabled,
+        strategy_evidence_minimum_trades=strategy_evidence_minimum_trades,
+        strategy_evidence_minimum_trading_days=strategy_evidence_minimum_trading_days,
+        strategy_evidence_profit_factor_floor=strategy_evidence_profit_factor_floor,
         market_scope=market_scope,
         mode_switch_policy=mode_switch_policy,
         xau=xau_settings,
