@@ -135,6 +135,10 @@ positive counterfactual has no runtime authority. Current REST-derived datasets 
 executable-fill evidence, so promotion is blocked even if a modeled metric becomes positive. Risk,
 notional, leverage, loss, and drawdown limits are unchanged by research activity.
 
+Wide-crypto replay is subject to the same boundary. Its one-position limit is a simulation invariant,
+not permission to open a runtime position. Snapshot spread proxies, historical candles, CPCV, and a
+sealed holdout cannot clear `STRATEGY_EVIDENCE_FAILED`, change leverage, or start a new PAPER run.
+
 ## Nautilus Risk Engine
 
 Use NautilusTrader's RiskEngine checks rather than bypassing them. Add application-level rules around it where necessary.

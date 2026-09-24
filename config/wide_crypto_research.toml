@@ -1,0 +1,47 @@
+[dataset]
+schema_version = 1
+family = "WIDE_CRYPTO_RESEARCH_V1"
+lookback_days = 90
+universe_size = 20
+minimum_listing_days = 180
+minimum_snapshot_quote_volume_usdt = "10000000"
+minimum_rolling_24h_quote_volume_usdt = "5000000"
+maximum_snapshot_spread_bps = "12"
+
+[strategy]
+decision_interval_hours = 1
+momentum_hours = [12, 24, 72]
+momentum_weights = ["0.45", "0.35", "0.20"]
+tail_fraction = "0.10"
+donchian_hours = 20
+atr_hours = 24
+volatility_baseline_hours = 168
+volume_baseline_hours = 48
+minimum_volume_ratio = "1.10"
+minimum_volatility_ratio = "1.00"
+maximum_breakout_extension_atr = "1.00"
+edge_cost_ratio = "3.00"
+edge_cost_neighbors = ["2.50", "3.00", "3.50", "4.00"]
+stop_atr = "1.30"
+profit_atr = "2.70"
+trail_activation_r = "1.50"
+trail_atr = "1.50"
+time_stop_hours = 18
+btc_ema_fast_4h = 50
+btc_ema_slow_4h = 200
+btc_slope_periods_4h = 3
+minimum_universe_size = 15
+max_concurrent_positions = 1
+
+[validation]
+selection_fraction = "0.50"
+validation_fraction = "0.20"
+test_fraction = "0.15"
+final_holdout_fraction = "0.15"
+cpcv_groups = 8
+cpcv_test_groups = 2
+purge_hours = 24
+embargo_hours = 24
+minimum_promotion_trades = 100
+minimum_profit_factor = "1.10"
+

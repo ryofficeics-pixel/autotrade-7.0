@@ -162,3 +162,20 @@ A positive no-trade filter benefit can coexist with a losing accepted strategy: 
 candidates is useful, but it does not prove the rare accepted candidates are profitable. Gross edge
 must first be positive and must then survive costs, chronological test, sealed holdout, stress, and
 PAPER operation. Recovery flatten PnL is operational evidence, not strategy alpha.
+
+## Wide-Crypto Workflow
+
+`python -m autotrade.wide_crypto_cli freeze` downloads and freezes the pre-declared Gate public-data
+window. `verify` re-hashes every material file. `full` computes the shared feature timeline, registers
+the bounded seven-experiment budget, seals the final holdout, replays the three base families under
+BASELINE and STRESSED assumptions, runs CPCV, records candidate, trade, and counterfactual ledgers,
+and updates the read-only report.
+
+The seven counted hypotheses are three base families and four pre-declared edge-cost ratio neighbors.
+Stress profiles are sensitivity views of the same hypotheses. The bounded loop is hypothesis,
+implementation, replay, validation, stress, registration, and keep or discard. It does not continue
+tuning until a positive result appears.
+
+`FUNDING_CARRY_ARBITRAGE_V1` remains scaffold-only. It has no execution path until two-leg lifecycle,
+hedge reconciliation, partial-fill recovery, leg-failure handling, funding settlement verification,
+and balance reconciliation exist.

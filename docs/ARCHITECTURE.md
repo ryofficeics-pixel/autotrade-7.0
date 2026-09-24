@@ -209,3 +209,12 @@ and is not used in V2 metrics. Restart verifies the
 entire chain and reconstructs rolling KAMA state, open shadow positions, closed shadow trades, and
 unresolved recent counterfactual horizons. A research failure is surfaced as an AMA error and cannot
 authorize or submit an order.
+
+### Wide-Crypto Research Boundary
+
+`autotrade.wide_crypto_data` and `autotrade.wide_crypto_strategy` extend the offline boundary for
+`WIDE_CRYPTO_RESEARCH_V1`. Public Gate candles and snapshot instrument metadata are frozen before
+replay. Cross-sectional features are computed once on a shared causal timeline. The three research
+families consume that same feature state and the same execution profiles. `autotrade.robust_validation`
+adds fixed-parameter CPCV, chronological stage metrics, a batch-sealed final holdout, parameter-neighbor
+diagnostics, and fail-closed promotion checks. None of these modules imports the runtime trader.

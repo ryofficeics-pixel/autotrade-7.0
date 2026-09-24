@@ -268,11 +268,41 @@
       </div>
 
       <div class="research-block">
-        <h3>Strategy Lab</h3>
+        <h3>Strategy Tournament</h3>
         <div class="table-wrap">
           <table class="research-table">
-            <thead><tr><th>Strategy</th><th>Version</th><th>Lifecycle</th><th>Sample</th><th>Gross exp.</th><th>Net exp.</th><th>PF</th><th>Max DD</th><th>Test</th><th>Holdout</th><th>Stress</th><th>Parameter stability</th><th>Eligible</th><th>Blocked by</th></tr></thead>
-            <tbody id="research-strategy-rows"><tr><td colspan="14" class="empty">No frozen strategy comparison has loaded.</td></tr></tbody>
+            <thead><tr><th>Strategy</th><th>Version</th><th>Lifecycle</th><th>Comparable</th><th>Trades</th><th>Gross exp.</th><th>Net exp.</th><th>PF</th><th>Max DD</th><th>Edge / cost</th><th>Validation</th><th>Test</th><th>Holdout</th><th>Stress</th><th>Stability</th><th>Eligible</th><th>Blocked by</th></tr></thead>
+            <tbody id="research-strategy-rows"><tr><td colspan="17" class="empty">No frozen strategy comparison has loaded.</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="research-block">
+        <h3>Universe</h3>
+        <div class="table-wrap">
+          <table class="research-detail-table">
+            <thead><tr><th>Market</th><th>Status</th><th>Snapshot turnover</th><th>Spread</th><th>Listing age</th><th>Funding</th><th>Reason</th></tr></thead>
+            <tbody id="research-universe-rows"><tr><td colspan="7" class="empty">No frozen universe has loaded.</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="research-block">
+        <h3>Top Candidates</h3>
+        <div class="table-wrap">
+          <table class="research-detail-table">
+            <thead><tr><th>Market</th><th>Side</th><th>Momentum</th><th>Percentile</th><th>Breakout</th><th>Volatility</th><th>Volume</th><th>Expected move</th><th>Cost</th><th>Edge / cost</th><th>Gate</th></tr></thead>
+            <tbody id="research-candidate-rows"><tr><td colspan="11" class="empty">No cross-sectional candidates have loaded.</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="research-block">
+        <h3>Overfitting Audit</h3>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Experiments</th><th>Families</th><th>Variants</th><th>Holdout access</th><th>CPCV paths</th><th>Positive paths</th><th>DSR</th><th>PBO</th><th>Null test</th></tr></thead>
+            <tbody id="research-overfit-rows"><tr><td colspan="9" class="empty">No overfitting audit has loaded.</td></tr></tbody>
           </table>
         </div>
       </div>

@@ -18,3 +18,9 @@ automatic transition, no restart reset, and no LIVE lifecycle state.
 REST Momentum V2 is retired after `STRATEGY_EVIDENCE_FAILED`. Raw KAMA is quarantined pending a new
 premise. Filtered KAMA remains observing; Entry V3, fair value, and combined challengers remain
 experimental until complete evidence exists. See `RESEARCH_ENGINE.md`.
+
+Wide-crypto challengers also fail promotion when point-in-time universe history, historical
+executable BBO, historical funding, or calibrated fill evidence is unavailable. CPCV, a positive
+neighbor, or a result better than the retired baseline cannot waive those blockers. All three new
+families begin and remain `EXPERIMENTAL` unless a later manual evidence review proves every existing
+gate.

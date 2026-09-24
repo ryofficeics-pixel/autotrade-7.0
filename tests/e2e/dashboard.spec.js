@@ -102,6 +102,31 @@ test("paper dashboard is truthful and controls fail closed", async ({ page }) =>
           state: "RETIRED", reason: "NEGATIVE_NORMAL_EXPECTANCY",
         },
       },
+      universe: {
+        selected: [{
+          symbol: "BTC_USDT", tradability: "AVAILABLE", snapshot_quote_volume_usdt: 120000000,
+          snapshot_spread_bps: 0.2, listing_age_days: 2500, funding_rate: "0.0001",
+          rejection_reasons: [],
+        }],
+        rejected: [{
+          symbol: "NEW_USDT", tradability: "REJECTED", snapshot_quote_volume_usdt: 900000,
+          snapshot_spread_bps: 20, listing_age_days: 2, funding_rate: null,
+          rejection_reasons: ["NEW_LISTING", "LOW_LIQUIDITY"],
+        }],
+      },
+      top_candidates: [{
+        symbol: "BTC_USDT", direction: "LONG", normalized_momentum: 1.25, percentile: 0.95,
+        breakout_distance_bps: 22, volatility_ratio: 1.4, volume_ratio: 1.6,
+        expected_move_bps: 80, execution_cost_bps: 20, edge_cost_ratio: 4,
+        decision: "ACCEPTED", first_rejection_reason: null,
+      }],
+      overfitting_audit: {
+        experiments_run: 7, families_tested: 3, parameter_variants_tested: 4,
+        holdout_access_count: 1, deflated_sharpe_ratio: { status: "UNAVAILABLE" },
+        probability_of_backtest_overfitting: { status: "UNAVAILABLE" },
+        synthetic_null: { status: "AVAILABLE" },
+      },
+      cpcv: { CROSS_SECTIONAL_BREAKOUT_V1: { number_of_paths: 28, positive_path_fraction: 0.5 } },
       paper_eligible_strategies: [],
       automatic_promotion: false,
       live_trading: "UNAVAILABLE",
@@ -169,6 +194,10 @@ test("paper dashboard is truthful and controls fail closed", async ({ page }) =>
   await expect(page.locator("#research-strategy-rows")).toContainText("XAU_FAIR_VALUE_V1");
   await expect(page.locator("#research-strategy-rows tr")).toHaveCount(2);
   await expect(page.locator("#research-funnel-rows")).toContainText("REGIME");
+  await expect(page.locator("#research-universe-rows")).toContainText("BTC_USDT");
+  await expect(page.locator("#research-universe-rows")).toContainText("NEW LISTING");
+  await expect(page.locator("#research-candidate-rows")).toContainText("ACCEPTED");
+  await expect(page.locator("#research-overfit-rows")).toContainText("28");
   await expect(page.locator("#research-lifecycle-rows")).toContainText("RETIRED");
   await page.screenshot({ path: "test-results/dashboard-overview.png", fullPage: true });
 

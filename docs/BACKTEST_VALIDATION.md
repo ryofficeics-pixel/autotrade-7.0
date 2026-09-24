@@ -105,3 +105,15 @@ position remains unavailable. Therefore, the result is a shadow counterfactual, 
 supported only when it improves net PnL without worsening drawdown after the minimum sample. Even then,
 promotion remains manual and requires chronological replay, holdout/walk-forward evidence, and extended
 PAPER validation.
+
+## Wide-Crypto Validation
+
+The wide-crypto base experiment pre-registers three families and one primary edge-cost ratio of 3.0.
+Ratios 2.5, 3.0, 3.5, and 4.0 are inspected only on the first 85% of the timeline as a local stability
+diagnostic. They do not select the primary parameter. The final 15% is sealed to the dataset and all
+three strategy identities, then opened once as a batch.
+
+Fixed-parameter CPCV uses eight contiguous groups and every two-group test combination. It applies a
+24-hour purge and embargo around group boundaries, charges the identical execution profile, and
+reports all 28 overlapping OOS path results. CPCV supplements the final holdout and does not replace
+it. Because paths overlap, their raw count is not an independent sample size.

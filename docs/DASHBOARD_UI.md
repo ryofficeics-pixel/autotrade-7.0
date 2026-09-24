@@ -247,3 +247,9 @@ the browser must not synthesize performance.
 The panel must state that execution influence is none, show insufficient samples explicitly, and never
 offer promotion or execution controls. Loading, backend-loss, empty, and mobile states use the same
 fail-closed behavior as the rest of the dashboard.
+
+The wide-crypto extension preserves the same ENERGY 2, RHYTHM 2, and MOTION 1 operations-console
+direction. Strategy Tournament adds comparable wide-crypto rows without hiding retired or failed
+families. Universe, Top Candidates, and Overfitting Audit are evidence tables, not decorative cards.
+All wide tables stay inside horizontal wrappers on mobile, and unavailable statistical measures show
+their real status instead of invented values.

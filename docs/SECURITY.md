@@ -6,6 +6,9 @@ No real trading credentials are required.
 
 Prefer public Gate.io market-data endpoints only where possible.
 
+The wide-crypto backfill uses unauthenticated Gate public endpoints. It sends no API key, reads no
+environment secret, and stores no credential or browser session material in its immutable dataset.
+
 ## Secrets
 
 When private TestNet/live credentials are introduced later:

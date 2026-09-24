@@ -129,3 +129,15 @@ this control. These limitations must remain visible in audit conclusions.
 The control atomically refreshes the requested `reports/*_latest.md` research surfaces plus structured
 JSON summaries. `reports/` is intentionally Git-ignored because those files are continuously rewritten
 runtime derivatives; the hash-chained run dataset is the evidence source of truth.
+
+## WIDE_CRYPTO_RESEARCH_V1
+
+The wide-crypto family freezes public Gate USDT perpetual evidence for a snapshot-selected 20-market
+universe. It stores 15-minute and 1-hour OHLCV, derived complete 4-hour bars, quote turnover, the
+selection snapshot, funding snapshot, bid and ask snapshot, mark and index snapshot, contract rules,
+listing age, rejection reasons, receive time, Git commit, config hash, source identity, and file hashes.
+
+Historical executable BBO, historical funding, queue position, and fills are unavailable from the
+selected candle source. They remain explicitly unavailable. Snapshot spread and funding may be used
+only as labeled proxies in sensitivity analysis. Current-universe selection creates survivorship bias,
+which blocks promotion until point-in-time universe history exists.

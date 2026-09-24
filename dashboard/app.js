@@ -293,7 +293,10 @@ function renderResearch(research = {}) {
     text("research-config", "N/A");
     text("research-profile", "N/A");
     text("research-experiments", "N/A");
-    $("research-strategy-rows").replaceChildren(emptyRow(14, "Generate and verify a frozen replay before comparing strategies."));
+    $("research-strategy-rows").replaceChildren(emptyRow(17, "Generate and verify a frozen replay before comparing strategies."));
+    $("research-universe-rows").replaceChildren(emptyRow(7, "No frozen universe has loaded."));
+    $("research-candidate-rows").replaceChildren(emptyRow(11, "No cross-sectional candidates have loaded."));
+    $("research-overfit-rows").replaceChildren(emptyRow(9, "No overfitting audit has loaded."));
     $("research-funnel-rows").replaceChildren(emptyRow(6, "No candidate decision ledger has loaded."));
     $("research-no-trade-rows").replaceChildren(emptyRow(6, "No resolved candidate outcomes have loaded."));
     $("research-edge-rows").replaceChildren(emptyRow(10, "No versioned execution profile has loaded."));
@@ -335,16 +338,20 @@ function renderResearch(research = {}) {
     promotion_eligible: false,
     reason_blocked: [row.status, row.reason],
   }));
-  const strategyRows = [...(research.strategy_lab || []), ...unsupported].map((metrics) => {
+  const tournament = research.strategy_tournament || [...(research.strategy_lab || []), ...unsupported];
+  const strategyRows = tournament.map((metrics) => {
     const row = document.createElement("tr");
     cell(row, metrics.strategy || "UNKNOWN", "symbol");
     cell(row, metrics.version || "N/A");
     cell(row, metrics.lifecycle_state || "EXPERIMENTAL");
-    cell(row, String(metrics.sample ?? "N/A"));
+    cell(row, metrics.comparable || "N/A");
+    cell(row, String(metrics.accepted_trades ?? metrics.sample ?? "N/A"));
     cell(row, metricBps(metrics.gross_expectancy_bps));
     cell(row, metricBps(metrics.net_expectancy_bps), Number(metrics.net_expectancy_bps) > 0 ? "positive" : "negative");
     cell(row, Number.isFinite(metrics.profit_factor) ? metrics.profit_factor.toFixed(2) : "N/A");
     cell(row, metricBps(metrics.maximum_drawdown_bps));
+    cell(row, Number.isFinite(metrics.edge_cost_ratio) ? metrics.edge_cost_ratio.toFixed(2) : "N/A");
+    cell(row, metricBps(metrics.validation_result));
     cell(row, metricBps(metrics.test_result));
     cell(row, metricBps(metrics.final_holdout_result));
     cell(row, metricBps(metrics.stress_result?.net_expectancy_bps));
@@ -354,6 +361,55 @@ function renderResearch(research = {}) {
     return row;
   });
   $("research-strategy-rows").replaceChildren(...strategyRows);
+
+  const universe = research.universe || {};
+  const universeRows = [...(universe.selected || []), ...(universe.rejected || []).slice(0, 30)].map((market) => {
+    const row = document.createElement("tr");
+    cell(row, market.symbol || "UNKNOWN", "symbol");
+    cell(row, market.tradability || "UNKNOWN");
+    cell(row, Number.isFinite(market.snapshot_quote_volume_usdt) ? `${compact.format(market.snapshot_quote_volume_usdt)} USDT` : "N/A");
+    cell(row, metricBps(market.snapshot_spread_bps));
+    cell(row, Number.isFinite(market.listing_age_days) ? `${market.listing_age_days.toFixed(0)}d` : "N/A");
+    cell(row, Number.isFinite(Number(market.funding_rate)) ? metricPercent(Number(market.funding_rate) * 100) : "N/A");
+    cell(row, (market.rejection_reasons || []).join(", ").replaceAll("_", " ") || "Eligible");
+    return row;
+  });
+  $("research-universe-rows").replaceChildren(...(universeRows.length ? universeRows : [emptyRow(7, "No frozen universe has loaded.")]));
+
+  const candidateRows = (research.top_candidates || []).map((candidate) => {
+    const row = document.createElement("tr");
+    cell(row, candidate.symbol || "UNKNOWN", "symbol");
+    cell(row, candidate.direction || "WAIT");
+    cell(row, Number.isFinite(candidate.normalized_momentum) ? candidate.normalized_momentum.toFixed(3) : "N/A");
+    cell(row, Number.isFinite(candidate.percentile) ? metricPercent(candidate.percentile * 100) : "N/A");
+    cell(row, metricBps(candidate.breakout_distance_bps));
+    cell(row, Number.isFinite(candidate.volatility_ratio) ? `${candidate.volatility_ratio.toFixed(2)}x` : "N/A");
+    cell(row, Number.isFinite(candidate.volume_ratio) ? `${candidate.volume_ratio.toFixed(2)}x` : "N/A");
+    cell(row, metricBps(candidate.expected_move_bps));
+    cell(row, metricBps(candidate.execution_cost_bps));
+    cell(row, Number.isFinite(candidate.edge_cost_ratio) ? candidate.edge_cost_ratio.toFixed(2) : "N/A");
+    cell(row, candidate.decision === "ACCEPTED" ? "ACCEPTED" : (candidate.first_rejection_reason || "REJECTED").replaceAll("_", " "));
+    return row;
+  });
+  $("research-candidate-rows").replaceChildren(...(candidateRows.length ? candidateRows : [emptyRow(11, "No cross-sectional candidates have loaded.")]));
+
+  const audit = research.overfitting_audit;
+  if (audit) {
+    const combinedCpcv = research.cpcv?.CROSS_SECTIONAL_BREAKOUT_V1 || {};
+    const row = document.createElement("tr");
+    cell(row, String(audit.experiments_run ?? "N/A"));
+    cell(row, String(audit.families_tested ?? "N/A"));
+    cell(row, String(audit.parameter_variants_tested ?? "N/A"));
+    cell(row, String(audit.holdout_access_count ?? "N/A"));
+    cell(row, String(combinedCpcv.number_of_paths ?? "N/A"));
+    cell(row, Number.isFinite(combinedCpcv.positive_path_fraction) ? metricPercent(combinedCpcv.positive_path_fraction * 100) : "N/A");
+    cell(row, audit.deflated_sharpe_ratio?.status || "UNAVAILABLE");
+    cell(row, audit.probability_of_backtest_overfitting?.status || "UNAVAILABLE");
+    cell(row, audit.synthetic_null?.status || "UNAVAILABLE");
+    $("research-overfit-rows").replaceChildren(row);
+  } else {
+    $("research-overfit-rows").replaceChildren(emptyRow(9, "No overfitting audit has loaded."));
+  }
 
   const funnels = research.candidate_funnels || {};
   const funnelRows = Object.entries(funnels).map(([name, funnel]) => {
@@ -374,9 +430,9 @@ function renderResearch(research = {}) {
     const row = document.createElement("tr");
     const funnel = funnels[name] || {};
     cell(row, name.replaceAll("_", " "), "symbol");
-    cell(row, String(value?.rejected ?? funnel.rejected ?? "N/A"));
-    cell(row, String(value?.avoided_losses ?? "N/A"));
-    cell(row, String(value?.missed_profitable_trades ?? "N/A"));
+    cell(row, String(value?.rejected_resolved_count ?? value?.rejected ?? funnel.rejected ?? "N/A"));
+    cell(row, String(value?.classifications?.AVOIDED_LOSS ?? value?.avoided_losses ?? "N/A"));
+    cell(row, String(value?.classifications?.MISSED_OPPORTUNITY ?? value?.missed_profitable_trades ?? "N/A"));
     cell(row, metricBps(value?.net_filter_benefit_bps));
     cell(row, duration(value?.time_in_no_trade_seconds));
     return row;

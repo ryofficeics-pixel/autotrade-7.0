@@ -196,3 +196,13 @@ restrictions prohibit using extracted data for automated trading decisions.
 - Ponytail: https://github.com/DietrichGebert/ponytail
 - Playwright: https://playwright.dev/
 - TradingView MCP: https://github.com/tradesdontlie/tradingview-mcp
+
+## Wide-Crypto Offline Research
+
+This workflow uses only public Gate data and cannot place orders:
+
+```powershell
+.venv\Scripts\python.exe -m autotrade.wide_crypto_cli freeze --project-root .
+.venv\Scripts\python.exe -m autotrade.wide_crypto_cli verify --project-root . --dataset research\datasets\wide-crypto-v1-...
+.venv\Scripts\python.exe -m autotrade.wide_crypto_cli full --project-root .
+```

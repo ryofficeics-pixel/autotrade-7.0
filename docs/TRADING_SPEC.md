@@ -163,3 +163,13 @@ Raw quotes must satisfy `0 < bid < ask`. Adverse slippage is applied with Decima
 quantized outward to the Gate contract tick. A one-tick minimum spread is allowed only after raw quote
 validation. A remaining symbol error is `QUARANTINED`; other valid symbols continue to monitor and may
 compete for the one execution slot.
+
+## Wide-Crypto Research Family
+
+The next distinct research family is wide-crypto cross-sectional breakout. `CS_MOMENTUM_ONLY_V1`
+tests relative 12-hour, 24-hour, and 72-hour strength. `CTA_BREAKOUT_ONLY_V1` tests prior-only
+Donchian timing with ATR, volatility expansion, and volume participation. The combined
+`CROSS_SECTIONAL_BREAKOUT_V1` requires relative-strength tail membership, breakout confirmation,
+BTC 4-hour regime agreement, and a dynamic movement budget at least three times modeled round-trip
+cost. Replay permits one position at a time, uses a one-hour entry lag, asymmetric ATR exits, and an
+18-hour time stop. These are research assumptions, not active PAPER rules.
