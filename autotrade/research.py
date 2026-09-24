@@ -1954,30 +1954,50 @@ def analyze_ama_evidence(source_path: Path) -> dict[str, object]:
     }
 
 
-def analyze_entry_v3_evidence(source_path: Path) -> dict[str, object]:
-    rows, source = _snapshot_jsonl(source_path)
-    candidates = [row for row in rows if row.get("event_type") == "entry_candidate"]
-    normalized = [
-        {
-            "candidate_id": row.get("candidate_id"),
-            "timestamp": row.get("decision_timestamp"),
-            "direction": row.get("direction"),
-            "decision": row.get("decision"),
-            "primary_rejection_reason": row.get("rejection_reason"),
-            "all_rejection_reasons": [row["rejection_reason"]]
-            if row.get("rejection_reason")
-            else [],
-        }
-        for row in candidates
-    ]
-    timestamps = sorted(
-        _as_int(row["decision_timestamp"])
-        for row in candidates
-        if row.get("decision_timestamp") is not None
-    )
-    no_trade_seconds = (
-        max(0.0, (timestamps[-1] - timestamps[0]) / 1000) if len(timestamps) > 1 else 0.0
-    )
+def analyze_entry_v3_evidence(source_path: Path | Sequence[Path]) -> dict[str, object]:
+    paths = (source_path,) if isinstance(source_path, Path) else tuple(source_path)
+    if not paths:
+        raise ValueError("at least one Entry V3 capture is required")
+    normalized: list[dict[str, object]] = []
+    sources: list[dict[str, object]] = []
+    candidate_ids: set[str] = set()
+    no_trade_seconds = 0.0
+    for path in paths:
+        rows, source = _snapshot_jsonl(path)
+        sources.append(source)
+        timestamps: list[int] = []
+        for row in rows:
+            if row.get("event_type") != "entry_candidate":
+                continue
+            candidate_id = str(row.get("candidate_id") or "")
+            if not candidate_id:
+                raise ValueError(f"{path} contains an Entry V3 candidate without identity")
+            if candidate_id in candidate_ids:
+                raise ValueError(f"duplicate Entry V3 candidate identity: {candidate_id}")
+            candidate_ids.add(candidate_id)
+            if row.get("decision_timestamp") is not None:
+                timestamps.append(_as_int(row["decision_timestamp"]))
+            normalized.append(
+                {
+                    "candidate_id": candidate_id,
+                    "timestamp": row.get("decision_timestamp"),
+                    "direction": row.get("direction"),
+                    "decision": row.get("decision"),
+                    "primary_rejection_reason": row.get("rejection_reason"),
+                    "all_rejection_reasons": [row["rejection_reason"]]
+                    if row.get("rejection_reason")
+                    else [],
+                }
+            )
+        if len(timestamps) > 1:
+            no_trade_seconds += max(timestamps) / 1000 - min(timestamps) / 1000
+    source = {
+        "capture_count": len(sources),
+        "prefix_bytes": sum(_as_int(item["prefix_bytes"]) for item in sources),
+        "record_count": sum(_as_int(item["record_count"]) for item in sources),
+        "identity_hash": _sha256(_canonical(sources)),
+        "captures": sources,
+    }
     return {
         "strategy_id": "MICROSTRUCTURE_ENTRY_V3",
         "source": source,
@@ -1987,10 +2007,11 @@ def analyze_entry_v3_evidence(source_path: Path) -> dict[str, object]:
             "status": "INSUFFICIENT_EVIDENCE",
             "reason": "NO_ACCEPTED_TRADES_OR_FORWARD_OUTCOMES_IN_ENTRY_V3_DECISION_LEDGER",
             "time_in_no_trade_seconds": no_trade_seconds,
-            "time_method": "FIRST_TO_LAST_REJECTED_CANDIDATE",
+            "time_method": "SUM_OF_CAPTURE_INTERVALS_FIRST_TO_LAST_CANDIDATE",
         },
         "limitations": [
-            "This is a live shadow decision prefix, not a frozen same-timeline replay.",
+            "These are live shadow capture prefixes, not a frozen same-timeline replay.",
+            "Operational gaps between capture files are excluded from no-trade time.",
             "Only the first binding rejection reason is present.",
             "No accepted candidates exist, so threshold loosening is not justified.",
         ],

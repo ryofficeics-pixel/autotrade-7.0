@@ -77,12 +77,19 @@ def _latest_file(root: Path, pattern: str) -> Path | None:
     return max(paths, key=lambda path: path.stat().st_mtime_ns) if paths else None
 
 
-def _source_paths(project_root: Path) -> tuple[Path, Path | None]:
+def _source_paths(project_root: Path) -> tuple[Path, list[Path]]:
     ama = _latest_file(project_root / "data" / "runs", "*/ama-control-v2.jsonl")
     if ama is None:
         raise FileNotFoundError("no AMA Control V2 evidence was found")
-    entry = _latest_file(
-        project_root / "logs" / "entry-v3-captures", "*/entry-v3-events.jsonl"
+    entry = sorted(
+        (
+            path
+            for path in (project_root / "logs" / "entry-v3-captures").glob(
+                "*/entry-v3-events.jsonl"
+            )
+            if path.is_file()
+        ),
+        key=lambda path: path.parent.name,
     )
     return ama, entry
 

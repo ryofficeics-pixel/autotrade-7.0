@@ -402,6 +402,33 @@ class EvidenceAnalyzerTests(unittest.TestCase):
             binding = cast(list[dict[str, object]], funnel["binding_gates"])
             self.assertEqual(binding[0], {"gate": "REGIME", "reject_count": 3})
 
+    def test_entry_v3_aggregates_capture_restarts(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            paths: list[Path] = []
+            for capture, reason in enumerate(("CHOP_REGIME", "CHASE_TOO_EXTENDED")):
+                path = Path(directory) / f"capture-{capture}.jsonl"
+                rows = [
+                    {
+                        "event_type": "entry_candidate",
+                        "candidate_id": f"candidate-{capture}-{index}",
+                        "decision_timestamp": capture * 10_000 + index * 1_000,
+                        "direction": "LONG",
+                        "decision": "REJECTED",
+                        "rejection_reason": reason,
+                    }
+                    for index in range(2)
+                ]
+                path.write_bytes(b"".join(canonical(row) + b"\n" for row in rows))
+                paths.append(path)
+            result = analyze_entry_v3_evidence(paths)
+            funnel = cast(dict[str, object], result["funnel"])
+            source = cast(dict[str, object], result["source"])
+            counterfactual = cast(dict[str, object], result["counterfactual"])
+            self.assertEqual(result["distinct_candidate_count"], 4)
+            self.assertEqual(funnel["generated"], 4)
+            self.assertEqual(source["capture_count"], 2)
+            self.assertEqual(counterfactual["time_in_no_trade_seconds"], 2.0)
+
 
 if __name__ == "__main__":
     unittest.main()
