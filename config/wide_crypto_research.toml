@@ -44,4 +44,3 @@ purge_hours = 24
 embargo_hours = 24
 minimum_promotion_trades = 100
 minimum_profit_factor = "1.10"
-

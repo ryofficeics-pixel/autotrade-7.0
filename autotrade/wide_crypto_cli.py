@@ -322,12 +322,20 @@ def _strategy_row(result: Mapping[str, object]) -> dict[str, object]:
     }
 
 
-def run_full(project_root: Path, *, dataset_only: bool = False) -> dict[str, object]:
+def run_full(
+    project_root: Path,
+    *,
+    dataset_only: bool = False,
+    dataset_root: Path | None = None,
+) -> dict[str, object]:
     config_path = project_root / "config" / "wide_crypto_research.toml"
     config = load_wide_config(config_path)
-    manifest = freeze_wide_crypto_dataset(project_root, config_path=config_path)
-    dataset_root = project_root / "research" / "datasets" / str(manifest["dataset_id"])
-    verify_wide_crypto_dataset(dataset_root)
+    if dataset_root is None:
+        manifest = freeze_wide_crypto_dataset(project_root, config_path=config_path)
+        dataset_root = project_root / "research" / "datasets" / str(manifest["dataset_id"])
+    else:
+        dataset_root = dataset_root.resolve()
+    manifest = verify_wide_crypto_dataset(dataset_root)
     if dataset_only:
         return manifest
     one_hour = load_candles(dataset_root, "1h")
@@ -381,7 +389,11 @@ def run_full(project_root: Path, *, dataset_only: bool = False) -> dict[str, obj
         for family in StrategyFamily
     ]
     holdout_seal = write_holdout_seal(
-        project_root / "research",
+        project_root
+        / "research"
+        / "experiments"
+        / "holdout-seals"
+        / str(manifest["dataset_id"]),
         dataset_id=str(manifest["dataset_id"]),
         dataset_hash=str(manifest["identity_hash"]),
         strategy_identities=strategy_identities,
@@ -582,7 +594,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     root = args.project_root.resolve()
     if args.command == "full":
-        result = run_full(root)
+        result = run_full(root, dataset_root=args.dataset)
     elif args.command == "freeze":
         result = run_full(root, dataset_only=True)
     else:
